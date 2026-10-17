@@ -23,8 +23,8 @@ test('repository model manifest lists valid, self-contained GLB files', async ()
     assert.equal(bytes.toString('ascii', 0, 4), 'glTF', `${entry.file} must have GLB magic`);
     assert.equal(bytes.readUInt32LE(4), 2, `${entry.file} must use GLB version 2`);
     assert.equal(bytes.readUInt32LE(8), bytes.length, `${entry.file} must have a valid length header`);
-    assert.equal(bytes.readUInt32LE(12), 0x4e4f534a, `${entry.file} must begin with a JSON chunk`);
-    const jsonLength = bytes.readUInt32LE(16);
+    assert.equal(bytes.readUInt32LE(16), 0x4e4f534a, `${entry.file} must begin with a JSON chunk`);
+    const jsonLength = bytes.readUInt32LE(12);
     const gltf = JSON.parse(bytes.toString('utf8', 20, 20 + jsonLength).trim());
     assert.ok(!(gltf.buffers || []).some(buffer => buffer.uri), `${entry.file} must be self-contained`);
     assert.ok(!(gltf.images || []).some(image => image.uri && !image.uri.startsWith('data:')), `${entry.file} must embed its textures`);

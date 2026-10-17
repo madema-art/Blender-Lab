@@ -25,18 +25,16 @@ if errorlevel 1 (
   goto :fail
 )
 
-if not "%BLENDER_LAB_SMOKE_TEST%"=="1" (
-  for /f "delims=" %%B in ('git branch --show-current 2^>nul') do set "CURRENT_BRANCH=%%B"
-  if not "%CURRENT_BRANCH%"=="main" (
-    echo [ERROR] This folder is not on the main branch. Switch it to main, then retry.
-    goto :fail
-  )
-  echo Updating Blender Lab from GitHub main...
-  git pull --ff-only origin main
-  if errorlevel 1 (
-    echo [ERROR] Git could not update main. Check your internet connection and local changes, then retry.
-    goto :fail
-  )
+for /f "delims=" %%B in ('git branch --show-current 2^>nul') do set "CURRENT_BRANCH=%%B"
+if not "%CURRENT_BRANCH%"=="main" (
+  echo [ERROR] This folder is not on the main branch. Switch it to main, then retry.
+  goto :fail
+)
+echo Updating Blender Lab from GitHub main...
+git pull --ff-only origin main
+if errorlevel 1 (
+  echo [ERROR] Git could not update main. Check your internet connection and local changes, then retry.
+  goto :fail
 )
 
 for /f "delims=" %%H in ('node -e "const fs=require('fs'),c=require('crypto');process.stdout.write(c.createHash('sha256').update(fs.readFileSync('package.json')).update(fs.readFileSync('package-lock.json')).digest('hex'))" 2^>nul') do set "DEPS_HASH=%%H"
@@ -108,7 +106,11 @@ if exist "%ProgramFiles%\Google\Chrome\Application\chrome.exe" set "CHROME=%Prog
 if not defined CHROME if exist "%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe" set "CHROME=%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe"
 if not defined CHROME if exist "%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe" set "CHROME=%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"
 if not defined CHROME for /f "delims=" %%C in ('where chrome.exe 2^>nul') do if not defined CHROME set "CHROME=%%C"
-if defined CHROME start "" "%CHROME%" --new-window http://127.0.0.1:5173/
+if not defined CHROME (
+  echo [ERROR] Google Chrome was not found. Install Chrome and double-click again.
+  goto :fail
+)
+start "" "%CHROME%" --new-window http://127.0.0.1:5173/
 echo Windows launcher smoke test passed: manifest, saucer, and Chrome launch verified.
 popd
 exit /b 0
