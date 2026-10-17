@@ -16,3 +16,26 @@ jobs:
         with:
           name: blender-lab-v0.1
           path: dist
+
+  windows-launcher:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: 'Blender Lab Checkout'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Exercise launcher from a Windows path with spaces
+        shell: pwsh
+        working-directory: 'Blender Lab Checkout'
+        run: |
+          $env:BLENDER_LAB_SMOKE_TEST = '1'
+          & '.\Start-Blender-Lab.bat'
+          if ($LASTEXITCODE -ne 0) { throw "Launcher exited with code $LASTEXITCODE" }
+      - name: Stop local server
+        if: always()
+        shell: pwsh
+        run: |
+          Get-NetTCPConnection -LocalPort 5173 -State Listen -ErrorAction SilentlyContinue |
+            ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }
