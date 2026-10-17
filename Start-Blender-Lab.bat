@@ -60,6 +60,9 @@ if "%INSTALL_DEPS%"=="1" (
 
 if "%BLENDER_LAB_SMOKE_TEST%"=="1" goto :smoke_start
 
+echo Checking for an existing Blender Lab server...
+powershell -NoProfile -ExecutionPolicy Bypass -Command "try { $m=Invoke-WebRequest -UseBasicParsing http://127.0.0.1:5173/models/manifest.json -TimeoutSec 2; if ($m.StatusCode -eq 200 -and $m.Content -match 'Alien Flying Saucer') { exit 0 }; exit 1 } catch { exit 1 }" >nul 2>nul
+if not errorlevel 1 goto :open_browser
 echo Starting Blender Lab...
 start "Blender Lab Server" cmd.exe /k "npm run dev -- --host 127.0.0.1 --strictPort"
 set "READY="
@@ -89,6 +92,8 @@ popd
 exit /b 0
 
 :smoke_start
+powershell -NoProfile -ExecutionPolicy Bypass -Command "try { $m=Invoke-WebRequest -UseBasicParsing http://127.0.0.1:5173/models/manifest.json -TimeoutSec 2; $model=Invoke-WebRequest -UseBasicParsing http://127.0.0.1:5173/models/Alien-Flying-Saucer.glb -TimeoutSec 5; if ($m.StatusCode -eq 200 -and $m.Content -match 'Alien Flying Saucer' -and $model.StatusCode -eq 200 -and $model.RawContentLength -gt 100) { exit 0 }; exit 1 } catch { exit 1 }" >nul 2>nul
+if not errorlevel 1 goto :smoke_ok
 start "Blender Lab Server" cmd.exe /k "npm run dev -- --host 127.0.0.1 --strictPort"
 set "READY="
 for /l %%I in (1,1,60) do (
