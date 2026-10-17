@@ -7,9 +7,9 @@ import './style.css';
 
 const $ = (id) => document.getElementById(id);
 $('app').innerHTML = `
-<header><div class="brand"><span class="logo">⬡</span><div><h1>Blender Lab</h1><div class="subtitle">A little space for your creations.</div></div><span class="version">v0.1</span></div><button id="open" class="primary">＋ Open GLB</button><input id="file" class="hidden" type="file" accept=".glb" multiple></header>
-<div class="workspace"><aside><div class="eyebrow">YOUR MODEL SHELF</div><div class="shelf" id="shelf"></div><p class="hint">Drop a Blender export into the studio. Pick an animation. See it come to life.</p><div class="aside-bottom"><div class="eyebrow">MADE FOR EXPLORING</div><p class="hint">Orbit, inspect, and try ideas.<br>One model. A clear view.</p><a href="https://github.com/madema-art/Blender-Lab" target="_blank" rel="noopener" class="hint">View project on GitHub ↗</a></div></aside>
-<main class="studio"><div class="scene-top"><div><h2 id="title">Studio moth</h2><p id="metadata">Built-in animation study</p></div><span class="badge">THREE.JS STUDIO</span></div><div class="viewport" id="viewport"><div class="toolbar"><div><button id="frame" title="Frame model (F)">Frame model</button><button id="front">Front</button><button id="side">Side</button></div><div><button id="shot">Snapshot ↓</button></div></div><div class="view-hint">DRAG to orbit · SCROLL to zoom · RIGHT DRAG to pan</div><div class="axis">Y ↑</div><div class="drop-overlay">Drop .glb models here</div></div>
+<header><div class="brand"><span class="logo">⬡</span><div><h1>Blender Lab</h1><div class="subtitle">A little space for your creations.</div></div><span class="version">v0.1</span></div><div class="header-actions"><button id="new" class="primary">＋ New Creation</button><button id="open">Open GLB</button></div><input id="file" class="hidden" type="file" accept=".glb" multiple></header>
+<div class="workspace"><aside><div class="eyebrow">YOUR MODEL SHELF</div><div class="shelf" id="shelf"></div><p class="hint">Work edits <code>creations/active/scene.py</code> and rebuilds the active Blender model.</p><div class="aside-bottom"><div class="eyebrow">MADE FOR EXPLORING</div><p class="hint">Orbit, inspect, and try ideas.<br>One model. A clear view.</p><a href="https://github.com/madema-art/Blender-Lab" target="_blank" rel="noopener" class="hint">View project on GitHub ↗</a></div></aside>
+<main class="studio"><div class="scene-top"><div><h2 id="title">Active Creation</h2><p id="metadata">Built-in animation study</p></div><span class="badge">BLENDER CREATION</span></div><div class="viewport" id="viewport"><div class="toolbar"><div><button id="frame" title="Frame model (F)">Frame model</button><button id="front">Front</button><button id="side">Side</button></div><div><button id="shot">Snapshot ↓</button></div></div><div class="view-hint">DRAG to orbit · SCROLL to zoom · RIGHT DRAG to pan</div><div class="axis">Y ↑</div><div class="drop-overlay">Drop .glb models here</div></div>
 <div class="controls"><div class="playback"><button id="play" class="primary" aria-label="Pause animation">Ⅱ</button><button id="restart" aria-label="Restart animation">↺</button><select id="clips" aria-label="Animation"></select><input id="timeline" type="range" min="0" max="1" step="0.001" value="0" aria-label="Animation timeline"><span class="time" id="time">0.00 / 0.00 s</span><select id="speed" class="speed" aria-label="Playback speed"><option value="0.25">0.25×</option><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option></select></div><div class="details"><label><input id="grid" type="checkbox" checked> Grid</label><label><input id="wire" type="checkbox"> Wireframe</label><label><input id="rotate" type="checkbox"> Turntable</label><label>Scale <input id="scale" type="number" min="0.01" max="100" step="0.1" value="1"></label><label>Yaw <input id="yaw" type="number" step="15" value="0">°</label><button id="export">Export GLB ↓</button><span id="status" class="status" role="status">Ready to explore</span></div></div><footer><span>BLENDER → GLB → LAB</span><span>Local files stay in your browser</span></footer></main></div>`;
 const viewport = $('viewport');
 const scene = new THREE.Scene();
@@ -28,7 +28,7 @@ scene.add(new THREE.HemisphereLight(0xe7f6ff, 0x526252, 2.5));
 const key = new THREE.DirectionalLight(0xffe9cc, 3); key.position.set(3, 5, 4); scene.add(key);
 const rim = new THREE.DirectionalLight(0xb6e6ff, 2); rim.position.set(-4, 2, -3); scene.add(rim);
 const grid = new THREE.GridHelper(20, 40, 0x52675c, 0x344840); grid.material.transparent = true; grid.material.opacity = 0.32; scene.add(grid);
-let root, mixer, action, clips = [], playing = true, loadId = 0, currentName = 'Studio moth';
+let root, mixer, action, clips = [], playing = true, loadId = 0, currentName = 'Active Creation';
 const loader = new GLTFLoader();
 const assets = [];
 const originalWire = new WeakMap();
@@ -36,7 +36,9 @@ function status(message, error = false) { $('status').textContent = message; $('
 function frame(direction) {
   if (!root) return;
   root.updateMatrixWorld(true);
-  const box = new THREE.Box3().setFromObject(root), center = box.getCenter(new THREE.Vector3());
+  const box = new THREE.Box3().setFromObject(root);
+  if (box.isEmpty()) { camera.position.set(5, 4, 7); orbit.target.set(0, 0, 0); grid.position.y = 0; grid.scale.setScalar(1); orbit.update(); return; }
+  const center = box.getCenter(new THREE.Vector3());
   const size = box.getSize(new THREE.Vector3());
   const radius = Math.max(size.length() / 2, 0.1);
   const distance = radius / Math.sin(THREE.MathUtils.degToRad(camera.fov / 2)) / Math.min(1, camera.aspect) * 1.15;
@@ -65,17 +67,18 @@ function install(model, animations, name, selected) {
   if (root) { mixer.stopAllAction(); mixer.uncacheRoot(root); scene.remove(root); dispose(root); }
   root = new THREE.Group(); root.name = 'LabTransform'; root.add(model); scene.add(root);
   clips = animations; mixer = new THREE.AnimationMixer(root); currentName = name;
+  $('scale').disabled = false; $('yaw').disabled = false; $('wire').disabled = false; $('export').disabled = false;
   $('title').textContent = name; $('scale').value = 1; $('yaw').value = 0; $('wire').checked = false;
   $('clips').replaceChildren(...(clips.length ? clips.map((clip,i) => new Option(clip.name || `Animation ${i+1}`, i)) : [new Option('No animations', '')]));
   let triangles = 0, meshes = 0;
   model.traverse(o => { if(o.isMesh) { meshes++; triangles += (o.geometry.index?.count || o.geometry.attributes.position?.count || 0) / 3; } });
   $('metadata').textContent = `${meshes} meshes · ${Math.round(triangles).toLocaleString()} triangles · ${clips.length} animations`;
   document.querySelectorAll('.asset').forEach(b => b.classList.toggle('selected', b.dataset.id === selected));
-  playing = true; selectClip(0); frame(); status('Ready to explore');
+  playing = true; selectClip(0); frame(); status(name === 'Active Creation' ? 'Blender creation loaded' : 'Ready to explore');
 }
 async function openAsset(asset) {
   const ticket = ++loadId; status(`Loading ${asset.name}…`);
-  try { const gltf = asset.demo ? makeDemo() : await loader.loadAsync(asset.url); if(ticket !== loadId) {dispose(gltf.scene);return;} install(gltf.scene,gltf.animations,asset.name,asset.id); }
+  try { const url = asset.local ? asset.url : `${asset.url}${asset.url.includes('?') ? '&' : '?'}v=${Date.now()}`; const gltf = asset.demo ? makeDemo() : await loader.loadAsync(url); if(ticket !== loadId) {dispose(gltf.scene);return;} install(gltf.scene,gltf.animations,asset.name,asset.id); }
   catch(error) { if(ticket === loadId) status(`Could not load ${asset.name}. Use a self-contained GLB export.`,true); console.error(error); }
 }
 function addAsset(asset) {
@@ -86,6 +89,26 @@ function addAsset(asset) {
 function importFiles(files) {
   for(const file of files) { if(!file.name.toLowerCase().endsWith('.glb')) {status('Please choose a .glb file. Export glTF Binary from Blender.',true);continue;} const asset={id:crypto.randomUUID(),name:file.name.replace(/\.glb$/i,''),url:URL.createObjectURL(file),local:true}; addAsset(asset); openAsset(asset); }
 }
+function startNewCreation() {
+  ++loadId;
+  if (root) { mixer?.stopAllAction(); if (mixer) mixer.uncacheRoot(root); scene.remove(root); dispose(root); }
+  root = undefined; mixer = undefined; action = undefined; clips = [];
+  currentName = 'New Creation';
+  $('title').textContent = 'New Creation';
+  $('metadata').textContent = 'Blank Blender scene · ready for Work';
+  $('clips').replaceChildren(new Option('No animations', ''));
+  $('clips').disabled = true;
+  for (const id of ['play','restart','timeline','speed','export']) $(id).disabled = true;
+  $('play').textContent = '▶'; $('play').setAttribute('aria-label', 'Play animation');
+  $('timeline').value = 0; $('time').textContent = '0.00 / 0.00 s';
+  $('scale').value = 1; $('yaw').value = 0; $('wire').checked = false;
+  $('scale').disabled = true; $('yaw').disabled = true; $('wire').disabled = true;
+  document.querySelectorAll('.asset').forEach(button => button.classList.toggle('selected', button.dataset.id === 'active-creation'));
+  camera.position.set(5, 4, 7); orbit.target.set(0, 0, 0); camera.near = .01; camera.far = 10000; camera.updateProjectionMatrix(); orbit.update();
+  grid.position.y = 0; grid.scale.setScalar(1);
+  status('Blank canvas selected. Ask Work to edit creations/active/scene.py, then rebuild.');
+}
+$('new').onclick=startNewCreation;
 $('open').onclick=()=>$('file').click(); $('file').onchange=e=>{importFiles(e.target.files); e.target.value='';};
 let dragDepth=0;
 viewport.addEventListener('dragenter',e=>{e.preventDefault();dragDepth++;viewport.classList.add('dragging');});
@@ -109,6 +132,6 @@ new ResizeObserver(()=>{const w=viewport.clientWidth,h=viewport.clientHeight;ren
 const clock=new THREE.Clock();
 renderer.setAnimationLoop(()=>{const delta=Math.min(clock.getDelta(),.1);if(mixer&&playing)mixer.update(delta*Number($('speed').value));orbit.update();renderer.render(scene,camera);const duration=action?.getClip().duration||0,time=action?.time||0;$('timeline').value=duration?time/duration:0;$('time').textContent=`${time.toFixed(2)} / ${duration.toFixed(2)} s`;});
 const demo = {id:'demo',name:'Studio moth',demo:true};
-addAsset(demo); openAsset(demo);
-fetch(`${import.meta.env.BASE_URL}models/manifest.json`).then(r=>{if(!r.ok)throw Error('Manifest unavailable');return r.json();}).then(entries=>{if(!Array.isArray(entries))throw Error('Manifest must be an array');const repositoryAssets=entries.map(entry=>{if(typeof entry.name!=='string'||typeof entry.file!=='string')throw Error('Each manifest entry needs name and file');return {id:crypto.randomUUID(),name:entry.name,url:new URL(entry.file,new URL(`${import.meta.env.BASE_URL}models/`,location.href)).href};});for(const asset of repositoryAssets)addAsset(asset);if(repositoryAssets.length)openAsset(repositoryAssets[0]);}).catch(error=>status(`Model shelf: ${error.message}`,true));
+addAsset(demo);
+fetch(`${import.meta.env.BASE_URL}models/manifest.json`).then(r=>{if(!r.ok)throw Error('Manifest unavailable');return r.json();}).then(entries=>{if(!Array.isArray(entries))throw Error('Manifest must be an array');const repositoryAssets=entries.map(entry=>{if(typeof entry.name!=='string'||typeof entry.file!=='string')throw Error('Each manifest entry needs name and file');return {id:entry.file==='active-creation.glb'?'active-creation':crypto.randomUUID(),name:entry.name,url:new URL(entry.file,new URL(`${import.meta.env.BASE_URL}models/`,location.href)).href};});for(const asset of repositoryAssets)addAsset(asset);if(repositoryAssets.length)openAsset(repositoryAssets.find(asset=>asset.id==='active-creation')||repositoryAssets[0]); else openAsset(demo);}).catch(error=>status(`Model shelf: ${error.message}`,true));
 window.addEventListener('beforeunload',()=>assets.filter(a=>a.local).forEach(a=>URL.revokeObjectURL(a.url)));

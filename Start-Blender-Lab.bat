@@ -60,19 +60,16 @@ if "%INSTALL_DEPS%"=="1" (
 
 if "%BLENDER_LAB_SMOKE_TEST%"=="1" goto :smoke_start
 
-echo Checking for an existing Blender Lab server...
-powershell -NoProfile -ExecutionPolicy Bypass -Command "try { $m=Invoke-WebRequest -UseBasicParsing http://127.0.0.1:5173/models/manifest.json -TimeoutSec 2; if ($m.StatusCode -eq 200 -and $m.Content -match 'Alien Flying Saucer') { exit 0 }; exit 1 } catch { exit 1 }" >nul 2>nul
-if not errorlevel 1 goto :open_browser
-echo Starting Blender Lab...
-start "Blender Lab Server" cmd.exe /k "npm run dev -- --host 127.0.0.1 --strictPort"
+echo Starting Blender Lab with GitHub model sync...
+start "Blender Lab Server" cmd.exe /k "npm run lab"
 set "READY="
 for /l %%I in (1,1,60) do (
-  powershell -NoProfile -ExecutionPolicy Bypass -Command "try { $r=Invoke-WebRequest -UseBasicParsing http://127.0.0.1:5173/ -TimeoutSec 2; if ($r.StatusCode -eq 200) { exit 0 }; exit 1 } catch { exit 1 }" >nul 2>nul
+  powershell -NoProfile -ExecutionPolicy Bypass -Command "try { $r=Invoke-WebRequest -UseBasicParsing http://127.0.0.1:5173/ -TimeoutSec 2; $m=Invoke-WebRequest -UseBasicParsing http://127.0.0.1:5173/models/manifest.json -TimeoutSec 2; $g=Invoke-WebRequest -UseBasicParsing http://127.0.0.1:5173/models/active-creation.glb -TimeoutSec 5; if ($r.StatusCode -eq 200 -and $m.StatusCode -eq 200 -and $m.Content -match 'Active Creation' -and $g.StatusCode -eq 200 -and $g.RawContentLength -gt 20) { exit 0 }; exit 1 } catch { exit 1 }" >nul 2>nul
   if not errorlevel 1 set "READY=1"
   if defined READY goto :open_browser
   timeout /t 1 /nobreak >nul
 )
-echo [ERROR] Blender Lab did not start at http://127.0.0.1:5173 within 60 seconds.
+echo [ERROR] Blender Lab did not start or serve the active creation at http://127.0.0.1:5173 within 60 seconds.
 echo Check the separate Blender Lab Server window for details.
 goto :fail
 
@@ -92,12 +89,12 @@ popd
 exit /b 0
 
 :smoke_start
-powershell -NoProfile -ExecutionPolicy Bypass -Command "try { $m=Invoke-WebRequest -UseBasicParsing http://127.0.0.1:5173/models/manifest.json -TimeoutSec 2; $model=Invoke-WebRequest -UseBasicParsing http://127.0.0.1:5173/models/Alien-Flying-Saucer.glb -TimeoutSec 5; if ($m.StatusCode -eq 200 -and $m.Content -match 'Alien Flying Saucer' -and $model.StatusCode -eq 200 -and $model.RawContentLength -gt 100) { exit 0 }; exit 1 } catch { exit 1 }" >nul 2>nul
+powershell -NoProfile -ExecutionPolicy Bypass -Command "try { $m=Invoke-WebRequest -UseBasicParsing http://127.0.0.1:5173/models/manifest.json -TimeoutSec 2; $active=Invoke-WebRequest -UseBasicParsing http://127.0.0.1:5173/models/active-creation.glb -TimeoutSec 5; $model=Invoke-WebRequest -UseBasicParsing http://127.0.0.1:5173/models/Alien-Flying-Saucer.glb -TimeoutSec 5; if ($m.StatusCode -eq 200 -and $m.Content -match 'Active Creation' -and $m.Content -match 'Alien Flying Saucer' -and $active.StatusCode -eq 200 -and $active.RawContentLength -gt 20 -and $model.StatusCode -eq 200 -and $model.RawContentLength -gt 100) { exit 0 }; exit 1 } catch { exit 1 }" >nul 2>nul
 if not errorlevel 1 goto :smoke_ok
 start "Blender Lab Server" cmd.exe /k "npm run dev -- --host 127.0.0.1 --strictPort"
 set "READY="
 for /l %%I in (1,1,60) do (
-  powershell -NoProfile -ExecutionPolicy Bypass -Command "try { $m=Invoke-WebRequest -UseBasicParsing http://127.0.0.1:5173/models/manifest.json -TimeoutSec 2; $model=Invoke-WebRequest -UseBasicParsing http://127.0.0.1:5173/models/Alien-Flying-Saucer.glb -TimeoutSec 5; if ($m.StatusCode -eq 200 -and $m.Content -match 'Alien Flying Saucer' -and $model.StatusCode -eq 200 -and $model.RawContentLength -gt 100) { exit 0 }; exit 1 } catch { exit 1 }" >nul 2>nul
+  powershell -NoProfile -ExecutionPolicy Bypass -Command "try { $m=Invoke-WebRequest -UseBasicParsing http://127.0.0.1:5173/models/manifest.json -TimeoutSec 2; $active=Invoke-WebRequest -UseBasicParsing http://127.0.0.1:5173/models/active-creation.glb -TimeoutSec 5; $model=Invoke-WebRequest -UseBasicParsing http://127.0.0.1:5173/models/Alien-Flying-Saucer.glb -TimeoutSec 5; if ($m.StatusCode -eq 200 -and $m.Content -match 'Active Creation' -and $m.Content -match 'Alien Flying Saucer' -and $active.StatusCode -eq 200 -and $active.RawContentLength -gt 20 -and $model.StatusCode -eq 200 -and $model.RawContentLength -gt 100) { exit 0 }; exit 1 } catch { exit 1 }" >nul 2>nul
   if not errorlevel 1 set "READY=1"
   if defined READY goto :smoke_ok
   timeout /t 1 /nobreak >nul
@@ -116,7 +113,7 @@ if not defined CHROME (
   goto :fail
 )
 start "" "%CHROME%" --new-window http://127.0.0.1:5173/
-echo Windows launcher smoke test passed: manifest, saucer, and Chrome launch verified.
+echo Windows launcher smoke test passed: active creation, saucer, and Chrome launch verified.
 popd
 exit /b 0
 

@@ -1,43 +1,45 @@
-# Blender Lab v0.1
+# Blender Lab
 
-A quiet, GitHub-based studio for viewing Blender creations in Three.js and trying their animations. A model shelf, a large viewport, and the controls you actually need.
+A browser-based canvas for inspecting Blender creations. Blender Lab preserves the model shelf, animation controls, and review tools while the active creation is built with Blender Python in Work.
 
-## Run
+## Start Blender Lab on Windows
 
-Requires Node.js 22.12+ (or 24).
+Double-click `Start-Blender-Lab.bat` in the repository root. It updates from GitHub `main`, installs dependencies when the lockfile changes, starts the local server, and opens Chrome. Keep the **Blender Lab Server** window open while you use the canvas. It checks GitHub every 15 seconds; when Work commits a changed active GLB, Vite reloads the page and the new model appears.
 
-1. Clone this repository and open its folder in a terminal.
-2. Run `npm ci`.
-3. Run `npm run dev` and open the printed local address.
+Requires Git for Windows, Node.js 22.12 or newer, and Google Chrome. No desktop Blender installation is needed on your PC. The launcher shows a readable error and keeps its window open if startup fails.
 
-`npm test` checks animation playback and GLB export/import. `npm run build` produces a static site in `dist/`; `npm run preview` serves that build. The GitHub check workflow tests/builds each push and provides a downloadable build artifact.
+For development from a terminal, use `npm ci` and `npm run lab`. The simpler `npm run dev` command is still available, but it does not run the GitHub sync loop. Run `npm test` and `npm run build` to check the project.
 
-## Included
+## Active Blender creation
 
-- Procedural Studio moth with Flutter and Glide clips. This is a Three.js demo, not a Blender-generated asset.
-- Load multiple self-contained `.glb` files with Open GLB or drag-and-drop.
-- Orbit, pan, zoom, frame model, front and side views.
-- Animation selection, play/pause, restart, timeline scrubbing, and playback speed.
-- Grid, wireframe, turntable, scale, and yaw adjustments.
-- Download a transparent PNG snapshot or export the current model as GLB, including clips and wrapper transforms.
-- Responsive layout and keyboard shortcuts: **Space** plays/pauses; **F** frames the model.
+There is one predictable source for the current Work creation:
 
-## Add models to the permanent shelf
+- Blender Python source: `creations/active/scene.py`
+- Generated browser model: `public/models/active-creation.glb`
+- Shelf registration: first entry in `public/models/manifest.json`
 
-Put a self-contained GLB into `public/models/`. Add a corresponding entry to `public/models/manifest.json`, for example an object with `"name": "Castaway"` and `"file": "castaway.glb"` inside its array. Paths are relative to `public/models/`. Commit both files. The shelf loads them at startup.
+The source starts with an empty Blender scene. Work changes that Python file with `bpy`, then runs:
 
-Files opened from your computer stay in browser memory and disappear from the shelf on reload. Export downloads a new file; it does not overwrite your original or commit to GitHub. Nothing uploads your local models.
+```sh
+/opt/bpy-venv/bin/python tools/build_active_creation.py
+```
 
-## Blender / AI workflow
+The builder resets Blender to a blank scene, executes the source, exports a self-contained GLB, checks the GLB structure, imports it back with Blender, and only then replaces the active model. Keep the source and generated GLB together in the same GitHub commit. GitHub is the source of truth and keeps the version history.
 
-Keep model-building Python scripts and optional `.blend` sources under `assets/<model>/`. Export GLB to `public/models/`, update the manifest, test in the Lab, and commit scripts and exports together. Future AI sessions should read `AGENTS.md` first.
+### Working with Work
 
-In desktop Blender, choose **File → Export → glTF 2.0 → glTF Binary (.glb)**. Include animations and pack textures. For headless Blender, `tools/export_blend.py` exports the loaded scene; invoke it with Blender's `--background`, `--python`, and an output path after `--`.
+- Click **New Creation** to clear the canvas and begin from a blank creation. Then prompt Work to create or edit the active Blender scene. Work resets `creations/active/scene.py` to an empty scene for a new creation, or reads and modifies its current contents for an edit.
+- For example: “Start with a cube,” “Make it into a canoe,” or “Add wooden ribs.” Work should update the active Python source, run the builder above, inspect the generated GLB, and commit both files to `main`.
+- The server window pulls those commits automatically. The Vite watcher reloads the open canvas when the manifest or a model file changes.
 
-## Scope
+The **Studio moth** remains on the shelf as a Three.js animation example. It is not the active Blender creation. Other repository GLBs can remain in the manifest shelf, and local GLBs can still be opened or dropped into the canvas for review.
 
-v0.1 inspects exported models and makes basic object transforms. Mesh editing, rig editing, animation authoring, and rebuilding assets remain Blender/Python tasks. Blender/bpy is not installed by this project. Only self-contained GLB is supported; compressed Draco/KTX2 assets require decoding support that is not included yet. Large assets depend on your browser/GPU memory.
+## Canvas tools
 
-## Hosting
+Orbit, pan, zoom, frame, front and side views; animation selection and playback; timeline scrubbing and speed; grid, wireframe, turntable, scale and yaw; PNG snapshots; GLB export. Space toggles animation and F frames the model.
 
-The `dist/` build can be served on any static host, including GitHub Pages. Build URLs are relative so repository subpaths work. Hosting has not been configured by this repository's check workflow.
+The app does not upload files opened from the computer. Export creates a downloaded copy and does not overwrite source assets or commit to GitHub.
+
+## Build and hosting
+
+`npm run build` creates `dist/`; `npm run preview` serves that build. Static hosting remains supported for review, but automatic GitHub sync is provided by the local `npm run lab` workflow.

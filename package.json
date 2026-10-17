@@ -1,1 +1,19 @@
-{"name":"blender-lab","version":"0.1.0","private":true,"type":"module","scripts":{"dev":"vite --host 0.0.0.0","build":"vite build --base=./","preview":"vite preview --host 0.0.0.0","test":"node --test"},"dependencies":{"three":"^0.185.0"},"devDependencies":{"vite":"^7.0.0"}}
+{
+  "name": "blender-lab",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "lab": "node tools/lab-server.js",
+    "build": "vite build --base=./",
+    "preview": "vite preview --host 0.0.0.0",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "three": "^0.185.0"
+  },
+  "devDependencies": {
+    "vite": "^7.0.0"
+  }
+}
