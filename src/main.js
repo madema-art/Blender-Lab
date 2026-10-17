@@ -78,7 +78,19 @@ function install(model, animations, name, selected) {
 }
 async function openAsset(asset) {
   const ticket = ++loadId; status(`Loading ${asset.name}…`);
-  try { const url = asset.local ? asset.url : `${asset.url}${asset.url.includes('?') ? '&' : '?'}v=${Date.now()}`; const gltf = asset.demo ? makeDemo() : await loader.loadAsync(url); if(ticket !== loadId) {dispose(gltf.scene);return;} install(gltf.scene,gltf.animations,asset.name,asset.id); }
+  try {
+    const url = asset.local ? asset.url : `${asset.url}${asset.url.includes('?') ? '&' : '?'}v=${Date.now()}`;
+    const gltf = asset.demo ? makeDemo() : await loader.loadAsync(url);
+    if(ticket !== loadId) {dispose(gltf.scene);return;}
+    const animationSets = await Promise.all((asset.animationSources || []).map(source => loader.loadAsync(`${source}${source.includes('?') ? '&' : '?'}v=${Date.now()}`)));
+    if(ticket !== loadId) {dispose(gltf.scene);for(const set of animationSets)dispose(set.scene);return;}
+    const clips = [], names = new Set();
+    for (const clip of [...gltf.animations, ...animationSets.flatMap(set => set.animations)]) {
+      if (!names.has(clip.name)) { names.add(clip.name); clips.push(clip); }
+    }
+    for (const set of animationSets) dispose(set.scene);
+    install(gltf.scene,clips,asset.name,asset.id);
+  }
   catch(error) { if(ticket === loadId) status(`Could not load ${asset.name}. Use a self-contained GLB export.`,true); console.error(error); }
 }
 function addAsset(asset) {
@@ -133,5 +145,5 @@ const clock=new THREE.Clock();
 renderer.setAnimationLoop(()=>{const delta=Math.min(clock.getDelta(),.1);if(mixer&&playing)mixer.update(delta*Number($('speed').value));orbit.update();renderer.render(scene,camera);const duration=action?.getClip().duration||0,time=action?.time||0;$('timeline').value=duration?time/duration:0;$('time').textContent=`${time.toFixed(2)} / ${duration.toFixed(2)} s`;});
 const demo = {id:'demo',name:'Studio moth',demo:true};
 addAsset(demo);
-fetch(`${import.meta.env.BASE_URL}models/manifest.json`).then(r=>{if(!r.ok)throw Error('Manifest unavailable');return r.json();}).then(entries=>{if(!Array.isArray(entries))throw Error('Manifest must be an array');const repositoryAssets=entries.map(entry=>{if(typeof entry.name!=='string'||typeof entry.file!=='string')throw Error('Each manifest entry needs name and file');return {id:entry.file==='active-creation.glb'?'active-creation':crypto.randomUUID(),name:entry.name,url:new URL(entry.file,new URL(`${import.meta.env.BASE_URL}models/`,location.href)).href};});for(const asset of repositoryAssets)addAsset(asset);if(repositoryAssets.length)openAsset(repositoryAssets.find(asset=>asset.id==='active-creation')||repositoryAssets[0]); else openAsset(demo);}).catch(error=>status(`Model shelf: ${error.message}`,true));
+fetch(`${import.meta.env.BASE_URL}models/manifest.json`).then(r=>{if(!r.ok)throw Error('Manifest unavailable');return r.json();}).then(entries=>{if(!Array.isArray(entries))throw Error('Manifest must be an array');const modelBase=new URL(`${import.meta.env.BASE_URL}models/`,location.href);const repositoryAssets=entries.map(entry=>{if(typeof entry.name!=='string'||typeof entry.file!=='string')throw Error('Each manifest entry needs name and file');return {id:entry.file==='active-creation.glb'?'active-creation':crypto.randomUUID(),name:entry.name,url:new URL(entry.file,modelBase).href,animationSources:Array.isArray(entry.animationSources)?entry.animationSources.map(source=>new URL(source.file,modelBase).href):[]};});for(const asset of repositoryAssets)addAsset(asset);if(repositoryAssets.length)openAsset(repositoryAssets.find(asset=>asset.id==='active-creation')||repositoryAssets[0]); else openAsset(demo);}).catch(error=>status(`Model shelf: ${error.message}`,true));
 window.addEventListener('beforeunload',()=>assets.filter(a=>a.local).forEach(a=>URL.revokeObjectURL(a.url)));

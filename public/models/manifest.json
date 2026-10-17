@@ -6,5 +6,216 @@
   {
     "name": "Alien Flying Saucer",
     "file": "Alien-Flying-Saucer.glb"
+  },
+  {
+    "name": "Blackfin Reef Shark",
+    "file": "Paradise_Island_Blackfin_Reef_Shark.glb",
+    "sourceRepository": "madema-art/Paradise-island",
+    "sourcePath": "assets/Paradise_Island_Blackfin_Reef_Shark.glb"
+  },
+  {
+    "name": "Dolphin Animation Rig",
+    "file": "Paradise_Island_Dolphin_Animation_Rig.glb",
+    "sourceRepository": "madema-art/Paradise-island",
+    "sourcePath": "assets/Paradise_Island_Dolphin_Animation_Rig.glb"
+  },
+  {
+    "name": "Dolphin Family",
+    "file": "Paradise_Island_Dolphin_Family.glb",
+    "sourceRepository": "madema-art/Paradise-island",
+    "sourcePath": "assets/Paradise_Island_Dolphin_Family.glb"
+  },
+  {
+    "name": "Green Sea Turtle",
+    "file": "Paradise_Island_Green_Sea_Turtle.glb",
+    "sourceRepository": "madema-art/Paradise-island",
+    "sourcePath": "assets/Paradise_Island_Green_Sea_Turtle.glb"
+  },
+  {
+    "name": "Humpback Whale",
+    "file": "Paradise_Island_Humpback_Whale.glb",
+    "sourceRepository": "madema-art/Paradise-island",
+    "sourcePath": "assets/Paradise_Island_Humpback_Whale.glb"
+  },
+  {
+    "name": "Silver Gull — Adult",
+    "file": "Paradise_Island_Silver_Gull_Adult.glb",
+    "sourceRepository": "madema-art/Paradise-island",
+    "sourcePath": "assets/Paradise_Island_Silver_Gull_Adult.glb"
+  },
+  {
+    "name": "Silver Gull — Juvenile",
+    "file": "Paradise_Island_Silver_Gull_Juvenile.glb",
+    "sourceRepository": "madema-art/Paradise-island",
+    "sourcePath": "assets/Paradise_Island_Silver_Gull_Juvenile.glb"
+  },
+  {
+    "name": "Barn Owl",
+    "file": "barn_owl.glb",
+    "sourceRepository": "madema-art/Paradise-island",
+    "sourcePath": "assets/barn_owl.glb"
+  },
+  {
+    "name": "Boar",
+    "file": "boar.glb",
+    "sourceRepository": "madema-art/Paradise-island",
+    "sourcePath": "assets/boar.glb"
+  },
+  {
+    "name": "Cave",
+    "file": "cave.glb",
+    "sourceRepository": "madema-art/Paradise-island",
+    "sourcePath": "assets/cave.glb"
+  },
+  {
+    "name": "Crab",
+    "file": "crab.glb",
+    "sourceRepository": "madema-art/Paradise-island",
+    "sourcePath": "assets/crab.glb"
+  },
+  {
+    "name": "Flamingo",
+    "file": "flamingo.glb",
+    "sourceRepository": "madema-art/Paradise-island",
+    "sourcePath": "assets/flamingo.glb"
+  },
+  {
+    "name": "Fruit Bat",
+    "file": "fruitbat.glb",
+    "sourceRepository": "madema-art/Paradise-island",
+    "sourcePath": "assets/fruitbat.glb"
+  },
+  {
+    "name": "Great Frigatebird — Female",
+    "file": "great_frigatebird_female.glb",
+    "sourceRepository": "madema-art/Paradise-island",
+    "sourcePath": "assets/great_frigatebird_female.glb"
+  },
+  {
+    "name": "Great Frigatebird — Juvenile",
+    "file": "great_frigatebird_juvenile.glb",
+    "sourceRepository": "madema-art/Paradise-island",
+    "sourcePath": "assets/great_frigatebird_juvenile.glb"
+  },
+  {
+    "name": "Great Frigatebird — Male",
+    "file": "great_frigatebird_male.glb",
+    "sourceRepository": "madema-art/Paradise-island",
+    "sourcePath": "assets/great_frigatebird_male.glb"
+  },
+  {
+    "name": "Island Rat",
+    "file": "island_rat.glb",
+    "sourceRepository": "madema-art/Paradise-island",
+    "sourcePath": "assets/island_rat.glb"
+  },
+  {
+    "name": "Lorikeet — Adult",
+    "file": "lorikeet_adult.glb",
+    "sourceRepository": "madema-art/Paradise-island",
+    "sourcePath": "assets/lorikeet_adult.glb"
+  },
+  {
+    "name": "Lorikeet — Juvenile",
+    "file": "lorikeet_juvenile.glb",
+    "sourceRepository": "madema-art/Paradise-island",
+    "sourcePath": "assets/lorikeet_juvenile.glb"
+  },
+  {
+    "name": "Pacific Boa",
+    "file": "pacific_boa.glb",
+    "sourceRepository": "madema-art/Paradise-island",
+    "sourcePath": "assets/pacific_boa.glb"
+  },
+  {
+    "name": "Sea Eagle — Adult",
+    "file": "sea_eagle_adult.glb",
+    "sourceRepository": "madema-art/Paradise-island",
+    "sourcePath": "assets/sea_eagle_adult.glb"
+  },
+  {
+    "name": "Sea Eagle — Juvenile",
+    "file": "sea_eagle_juvenile.glb",
+    "sourceRepository": "madema-art/Paradise-island",
+    "sourcePath": "assets/sea_eagle_juvenile.glb"
+  },
+  {
+    "name": "Tern",
+    "file": "tern.glb",
+    "sourceRepository": "madema-art/Paradise-island",
+    "sourcePath": "assets/tern.glb"
+  },
+  {
+    "name": "Yellow Tang",
+    "file": "yellow_tang.glb",
+    "sourceRepository": "madema-art/Paradise-island",
+    "sourcePath": "assets/yellow_tang.glb"
+  },
+  {
+    "name": "Castaway Staff",
+    "file": "Staff.glb",
+    "sourceRepository": "madema-art/Paradise-island",
+    "sourcePath": "assets/castaway/Staff.glb"
+  },
+  {
+    "name": "Capuchin Monkey",
+    "file": "Monkey.glb",
+    "sourceRepository": "madema-art/Paradise-island",
+    "sourcePath": "assets/monkey/Monkey.glb"
+  },
+  {
+    "name": "Coconut",
+    "file": "coconut.glb",
+    "sourceRepository": "madema-art/Paradise-island",
+    "sourcePath": "assets/monkey/coconut.glb"
+  },
+  {
+    "name": "Castaway",
+    "file": "Castaway.glb",
+    "sourceRepository": "madema-art/Paradise-island",
+    "sourcePath": "assets/castaway/Castaway.glb",
+    "animationSources": [
+      {
+        "file": "Castaway_anim_canoe.glb",
+        "sourcePath": "assets/castaway/Castaway_anim_canoe.glb"
+      },
+      {
+        "file": "Castaway_anim_climbing.glb",
+        "sourcePath": "assets/castaway/Castaway_anim_climbing.glb"
+      },
+      {
+        "file": "Castaway_anim_fishing.glb",
+        "sourcePath": "assets/castaway/Castaway_anim_fishing.glb"
+      },
+      {
+        "file": "Castaway_anim_locomotion.glb",
+        "sourcePath": "assets/castaway/Castaway_anim_locomotion.glb"
+      },
+      {
+        "file": "Castaway_anim_personality.glb",
+        "sourcePath": "assets/castaway/Castaway_anim_personality.glb"
+      },
+      {
+        "file": "Castaway_anim_posture.glb",
+        "sourcePath": "assets/castaway/Castaway_anim_posture.glb"
+      },
+      {
+        "file": "Castaway_anim_staff.glb",
+        "sourcePath": "assets/castaway/Castaway_anim_staff.glb"
+      },
+      {
+        "file": "Castaway_anim_survival.glb",
+        "sourcePath": "assets/castaway/Castaway_anim_survival.glb"
+      },
+      {
+        "file": "Castaway_anim_water.glb",
+        "sourcePath": "assets/castaway/Castaway_anim_water.glb"
+      },
+      {
+        "file": "Castaway_anim_wildlife.glb",
+        "sourcePath": "assets/castaway/Castaway_anim_wildlife.glb"
+      }
+    ],
+    "animationCount": 173
   }
 ]
