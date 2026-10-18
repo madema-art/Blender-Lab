@@ -1,1 +1,129 @@
-<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#101619"><title>Blender Lab · v0.1</title></head><body><div id="app"></div><script type="module" src="/src/main.js"></script></body></html>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#0c1316">
+  <meta name="description" content="Browse, animate, and inspect Blender creations in 3D.">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <title>Blender Lab</title>
+</head>
+<body>
+  <div id="app">
+    <header class="topbar">
+      <div class="brand">
+        <img src="/favicon.svg" width="36" height="36" alt="">
+        <div>
+          <h1>Blender Lab</h1>
+          <p class="tagline">Look at your creations in 3D</p>
+        </div>
+      </div>
+      <div class="top-actions">
+        <button id="new" type="button">New creation</button>
+        <button id="open" type="button" class="primary">Open a file</button>
+        <input id="file" class="hidden" type="file" accept=".glb" multiple>
+      </div>
+    </header>
+
+    <div class="layout">
+      <aside class="library" aria-labelledby="library-title">
+        <div class="library-head">
+          <h2 id="library-title">Creations</h2>
+          <span id="count" class="count"></span>
+        </div>
+        <label class="search">
+          <span class="sr-only">Search creations</span>
+          <input id="search" type="search" placeholder="Search by name" autocomplete="off">
+        </label>
+        <ul id="shelf" class="shelf"></ul>
+        <p id="shelf-empty" class="muted" hidden></p>
+      </aside>
+
+      <main class="stage">
+        <div class="stage-head">
+          <div class="stage-title">
+            <h2 id="title">Active Creation</h2>
+            <p id="metadata"></p>
+          </div>
+          <div class="views" role="group" aria-label="Camera views">
+            <button id="frame" type="button" title="Fit the model in view (F)">Fit</button>
+            <button id="front" type="button">Front</button>
+            <button id="side" type="button">Side</button>
+          </div>
+        </div>
+
+        <div class="viewport" id="viewport">
+          <div id="empty-stage" class="empty-stage" hidden>
+            <p>Pick a creation on the left, or open a .glb file.</p>
+          </div>
+          <p class="viewport-hint">Drag to turn. Scroll to zoom. Right-drag to move.</p>
+          <p id="status" class="status" role="status"></p>
+          <div class="drop-overlay">Drop a .glb file to open it</div>
+        </div>
+
+        <section class="transport" aria-label="Animation">
+          <div class="clips-head">
+            <span class="row-label">Animations</span>
+            <input id="clip-filter" type="search" placeholder="Find an animation" autocomplete="off" hidden>
+          </div>
+          <div id="clips" class="clips"></div>
+          <div class="player">
+            <button id="play" class="round primary" type="button" aria-label="Pause animation" disabled></button>
+            <button id="restart" type="button" disabled>Restart</button>
+            <input id="timeline" type="range" min="0" max="1" step="0.001" value="0" aria-label="Animation timeline" disabled>
+            <span id="time" class="time">0.00 / 0.00 s</span>
+            <label class="speed">Speed
+              <select id="speed" disabled>
+                <option value="0.25">0.25×</option>
+                <option value="0.5">0.5×</option>
+                <option value="1" selected>1×</option>
+                <option value="2">2×</option>
+              </select>
+            </label>
+          </div>
+        </section>
+      </main>
+
+      <aside class="inspector" aria-label="Details and settings">
+        <section>
+          <h3>About</h3>
+          <dl>
+            <dt>Made</dt><dd id="about-source">—</dd>
+            <dt>Updated</dt><dd id="about-updated">—</dd>
+            <dt>Size</dt><dd id="about-size">—</dd>
+            <dt>Animations</dt><dd id="about-anims">—</dd>
+          </dl>
+        </section>
+        <section>
+          <h3>Show</h3>
+          <label class="check"><input id="grid" type="checkbox" checked> Floor grid</label>
+          <label class="check"><input id="wire" type="checkbox" disabled> Wireframe</label>
+          <label class="check"><input id="rotate" type="checkbox"> Slow turn</label>
+        </section>
+        <section>
+          <h3>Adjust</h3>
+          <label class="field">Scale <input id="scale" type="number" min="0.01" max="100" step="0.1" value="1" disabled></label>
+          <label class="field">Turn <span><input id="yaw" type="number" step="15" value="0" disabled> °</span></label>
+          <button id="reset" type="button" disabled>Reset scale and turn</button>
+        </section>
+        <section>
+          <h3>Save</h3>
+          <button id="shot" type="button">Save picture</button>
+          <button id="export" type="button" disabled>Download GLB</button>
+          <p class="muted">Downloads a copy. Nothing is uploaded or changed.</p>
+        </section>
+        <section>
+          <h3>Keyboard</h3>
+          <dl class="keys">
+            <dt><kbd>Space</kbd></dt><dd>Play or pause</dd>
+            <dt><kbd>F</kbd></dt><dd>Fit the model</dd>
+            <dt><kbd>↑</kbd> <kbd>↓</kbd></dt><dd>Previous or next creation</dd>
+          </dl>
+        </section>
+        <a class="github" href="https://github.com/madema-art/Blender-Lab" target="_blank" rel="noopener">Project on GitHub</a>
+      </aside>
+    </div>
+  </div>
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>

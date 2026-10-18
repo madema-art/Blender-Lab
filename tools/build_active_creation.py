@@ -17,6 +17,7 @@ import runpy
 import struct
 import sys
 import tempfile
+from datetime import datetime, timezone
 
 import bpy
 
@@ -54,6 +55,19 @@ def read_glb(path: Path) -> dict:
         if chunk_type != BIN_CHUNK or offset + 8 + chunk_length > len(data):
             raise ValueError("invalid GLB binary chunk")
     return document
+
+
+def stamp_manifest(output: Path) -> None:
+    """Record the build time on the shelf entry so Blender Lab lists the active creation as newest."""
+    manifest = output.parent / "manifest.json"
+    if not manifest.is_file():
+        return
+    entries = json.loads(manifest.read_text(encoding="utf-8"))
+    stamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    for entry in entries:
+        if entry.get("file") == output.name:
+            entry["updated"] = stamp
+    manifest.write_text(json.dumps(entries, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
 def build(source: Path, output: Path) -> tuple[int, int]:
@@ -94,6 +108,7 @@ def build(source: Path, output: Path) -> tuple[int, int]:
             raise RuntimeError("GLB contains nodes but Blender imported no scene objects")
         temp_path.chmod(0o644)
         os.replace(temp_path, output)
+        stamp_manifest(output)
         return objects, meshes
     finally:
         temp_path.unlink(missing_ok=True)

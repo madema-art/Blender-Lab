@@ -34,6 +34,16 @@ The builder resets Blender to a blank scene, executes the source, exports a self
 
 The **Studio moth** remains on the shelf as a Three.js animation example. It is not the active Blender creation. Other repository GLBs can remain in the manifest shelf, and local GLBs can still be opened or dropped into the canvas for review.
 
+## Library and viewer
+
+The left column lists every creation newest first, with a preview of each model. Search narrows it by name, and the Up and Down arrow keys move through the list. The stage shows the selected model; its animations appear under the stage, with a filter box when a model has many. The right column holds details, display options, scale and turn, and saving.
+
+To add a creation to the library, add a manifest entry with an `updated` timestamp.
+
+## Shortcut icon
+
+`assets/blender-lab.ico` is the Blender Lab icon. To apply it to your desktop shortcut, run `tools\set-shortcut-icon.ps1` from PowerShell after pulling. It only changes shortcuts that point to `Start-Blender-Lab.bat`.
+
 ## Canvas tools
 
 Orbit, pan, zoom, frame, front and side views; animation selection and playback; timeline scrubbing and speed; grid, wireframe, turntable, scale and yaw; PNG snapshots; GLB export. Space toggles animation and F frames the model.

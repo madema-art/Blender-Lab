@@ -1,22 +1,23 @@
-import { makeDemo } from './demo.js';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
+import { makeDemo } from './demo.js';
+import { disposeObject } from './dispose.js';
+import { formatUpdated, matchesSearch, newestFirst, sourceLabel } from './library.js';
+import { createThumbnails } from './thumbnails.js';
 import './style.css';
 
 const $ = (id) => document.getElementById(id);
-$('app').innerHTML = `
-<header><div class="brand"><span class="logo">⬡</span><div><h1>Blender Lab</h1><div class="subtitle">A little space for your creations.</div></div><span class="version">v0.1</span></div><div class="header-actions"><button id="new" class="primary">＋ New Creation</button><button id="open">Open GLB</button></div><input id="file" class="hidden" type="file" accept=".glb" multiple></header>
-<div class="workspace"><aside><div class="eyebrow">YOUR MODEL SHELF</div><div class="shelf" id="shelf"></div><p class="hint">Work edits <code>creations/active/scene.py</code> and rebuilds the active Blender model.</p><div class="aside-bottom"><div class="eyebrow">MADE FOR EXPLORING</div><p class="hint">Orbit, inspect, and try ideas.<br>One model. A clear view.</p><a href="https://github.com/madema-art/Blender-Lab" target="_blank" rel="noopener" class="hint">View project on GitHub ↗</a></div></aside>
-<main class="studio"><div class="scene-top"><div><h2 id="title">Active Creation</h2><p id="metadata">Built-in animation study</p></div><span class="badge">BLENDER CREATION</span></div><div class="viewport" id="viewport"><div class="toolbar"><div><button id="frame" title="Frame model (F)">Frame model</button><button id="front">Front</button><button id="side">Side</button></div><div><button id="shot">Snapshot ↓</button></div></div><div class="view-hint">DRAG to orbit · SCROLL to zoom · RIGHT DRAG to pan</div><div class="axis">Y ↑</div><div class="drop-overlay">Drop .glb models here</div></div>
-<div class="controls"><div class="playback"><button id="play" class="primary" aria-label="Pause animation">Ⅱ</button><button id="restart" aria-label="Restart animation">↺</button><select id="clips" aria-label="Animation"></select><input id="timeline" type="range" min="0" max="1" step="0.001" value="0" aria-label="Animation timeline"><span class="time" id="time">0.00 / 0.00 s</span><select id="speed" class="speed" aria-label="Playback speed"><option value="0.25">0.25×</option><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option></select></div><div class="details"><label><input id="grid" type="checkbox" checked> Grid</label><label><input id="wire" type="checkbox"> Wireframe</label><label><input id="rotate" type="checkbox"> Turntable</label><label>Scale <input id="scale" type="number" min="0.01" max="100" step="0.1" value="1"></label><label>Yaw <input id="yaw" type="number" step="15" value="0">°</label><button id="export">Export GLB ↓</button><span id="status" class="status" role="status">Ready to explore</span></div></div><footer><span>BLENDER → GLB → LAB</span><span>Local files stay in your browser</span></footer></main></div>`;
+const PLAY_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l10.5-6.5z"/></svg>';
+const PAUSE_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 5.5h3.6v13H7zM13.4 5.5H17v13h-3.6z"/></svg>';
 const viewport = $('viewport');
+const shelf = $('shelf');
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(40, 1, 0.01, 10000);
 let renderer;
 try { renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true }); }
-catch { $('status').textContent = 'WebGL is unavailable. Enable hardware acceleration and reload.'; throw new Error('WebGL unavailable'); }
+catch { status('WebGL is unavailable. Turn on hardware acceleration in your browser, then reload.', true); throw new Error('WebGL unavailable'); }
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.setClearColor(0x000000, 0);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -28,11 +29,26 @@ scene.add(new THREE.HemisphereLight(0xe7f6ff, 0x526252, 2.5));
 const key = new THREE.DirectionalLight(0xffe9cc, 3); key.position.set(3, 5, 4); scene.add(key);
 const rim = new THREE.DirectionalLight(0xb6e6ff, 2); rim.position.set(-4, 2, -3); scene.add(rim);
 const grid = new THREE.GridHelper(20, 40, 0x52675c, 0x344840); grid.material.transparent = true; grid.material.opacity = 0.32; scene.add(grid);
-let root, mixer, action, clips = [], playing = true, loadId = 0, currentName = 'Active Creation';
+
+let root, mixer, action, clips = [], clipIndex = 0, playing = true, loadId = 0, current = null, statusTimer;
 const loader = new GLTFLoader();
+const thumbnails = createThumbnails();
 const assets = [];
+const visible = [];
 const originalWire = new WeakMap();
-function status(message, error = false) { $('status').textContent = message; $('status').classList.toggle('error', error); }
+const thumbOwners = new WeakMap();
+const demo = { id: 'demo', name: 'Studio moth', kind: 'demo', demo: true };
+const thumbObserver = 'IntersectionObserver' in window ? new IntersectionObserver(onThumbVisible, { rootMargin: '0px 240px' }) : null;
+
+function status(message, error = false) {
+  const line = $('status');
+  clearTimeout(statusTimer);
+  line.textContent = message;
+  line.classList.toggle('error', error);
+  line.classList.add('show');
+  if (!error) statusTimer = setTimeout(() => line.classList.remove('show'), 3200);
+}
+
 function frame(direction) {
   if (!root) return;
   root.updateMatrixWorld(true);
@@ -48,102 +64,362 @@ function frame(direction) {
   orbit.minDistance = radius * .1; orbit.maxDistance = distance * 10;
   grid.position.y = box.min.y - radius * .015; grid.scale.setScalar(radius / 3); orbit.update();
 }
+
+function setTransportEnabled(enabled) {
+  for (const id of ['play', 'restart', 'timeline', 'speed']) $(id).disabled = !enabled;
+}
+
+function note(text) {
+  const paragraph = document.createElement('p');
+  paragraph.className = 'muted';
+  paragraph.textContent = text;
+  return paragraph;
+}
+
+// Long clip lists (some models carry well over a hundred) are narrowed by the filter box.
+function renderClips() {
+  const filter = $('clip-filter');
+  filter.hidden = clips.length <= 12;
+  if (!clips.length) {
+    $('clips').replaceChildren(note(root ? 'No animations in this creation.' : 'Open a creation to see its motion.'));
+    return;
+  }
+  const words = filter.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const matches = clips.map((clip, index) => ({ clip, index, name: clip.name || `Animation ${index + 1}` }))
+    .filter(({ name }) => words.every(word => name.toLowerCase().includes(word)));
+  if (!matches.length) {
+    $('clips').replaceChildren(note(`No animation matches “${filter.value.trim()}”.`));
+    return;
+  }
+  $('clips').replaceChildren(...matches.map(({ index, name }) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'clip';
+    button.textContent = name;
+    button.setAttribute('aria-pressed', String(index === clipIndex));
+    button.onclick = () => selectClip(index);
+    return button;
+  }));
+}
+
 function selectClip(index) {
   if (action) action.stop();
+  clipIndex = index;
   action = clips[index] && mixer.clipAction(clips[index]);
   if (action) { action.reset().play(); mixer.update(0); }
   $('timeline').value = 0;
-  for (const id of ['play','restart','timeline','speed']) $(id).disabled = !action;
-  $('clips').disabled = !clips.length;
+  setTransportEnabled(Boolean(action));
+  renderClips();
   updatePlay();
 }
-function updatePlay() { $('play').textContent = playing ? 'Ⅱ' : '▶'; $('play').setAttribute('aria-label', playing ? 'Pause animation' : 'Play animation'); }
-function dispose(model) {
-  const textures = new Set(), materials = new Set(), geometries = new Set();
-  model.traverse(o => { if (o.geometry) geometries.add(o.geometry); for (const m of o.material ? (Array.isArray(o.material) ? o.material : [o.material]) : []) { materials.add(m); for (const v of Object.values(m)) if (v?.isTexture) textures.add(v); } });
-  textures.forEach(t => t.dispose()); materials.forEach(m => m.dispose()); geometries.forEach(g => g.dispose());
+
+function updatePlay() {
+  const button = $('play');
+  button.innerHTML = playing ? PAUSE_ICON : PLAY_ICON;
+  const label = playing ? 'Pause animation' : 'Play animation';
+  button.setAttribute('aria-label', label);
+  button.title = label;
 }
-function install(model, animations, name, selected) {
-  if (root) { mixer.stopAllAction(); mixer.uncacheRoot(root); scene.remove(root); dispose(root); }
+
+function install(model, animations, asset) {
+  if (root) { mixer.stopAllAction(); mixer.uncacheRoot(root); scene.remove(root); disposeObject(root); }
   root = new THREE.Group(); root.name = 'LabTransform'; root.add(model); scene.add(root);
-  clips = animations; mixer = new THREE.AnimationMixer(root); currentName = name;
-  $('scale').disabled = false; $('yaw').disabled = false; $('wire').disabled = false; $('export').disabled = false;
-  $('title').textContent = name; $('scale').value = 1; $('yaw').value = 0; $('wire').checked = false;
-  $('clips').replaceChildren(...(clips.length ? clips.map((clip,i) => new Option(clip.name || `Animation ${i+1}`, i)) : [new Option('No animations', '')]));
+  clips = animations; mixer = new THREE.AnimationMixer(root); current = asset; playing = true;
+  $('clip-filter').value = '';
+  $('title').textContent = asset.name;
+  $('metadata').textContent = sourceLabel(asset);
+  $('empty-stage').hidden = true;
+  $('scale').value = 1; $('yaw').value = 0; $('wire').checked = false;
+  for (const id of ['scale', 'yaw', 'wire', 'reset', 'export']) $(id).disabled = false;
   let triangles = 0, meshes = 0;
-  model.traverse(o => { if(o.isMesh) { meshes++; triangles += (o.geometry.index?.count || o.geometry.attributes.position?.count || 0) / 3; } });
-  $('metadata').textContent = `${meshes} meshes · ${Math.round(triangles).toLocaleString()} triangles · ${clips.length} animations`;
-  document.querySelectorAll('.asset').forEach(b => b.classList.toggle('selected', b.dataset.id === selected));
-  playing = true; selectClip(0); frame(); status(name === 'Active Creation' ? 'Blender creation loaded' : 'Ready to explore');
+  model.traverse(node => { if (node.isMesh) { meshes++; triangles += (node.geometry.index?.count || node.geometry.attributes.position?.count || 0) / 3; } });
+  $('about-source').textContent = sourceLabel(asset);
+  $('about-updated').textContent = formatUpdated(asset.updated);
+  $('about-size').textContent = `${meshes} parts, ${Math.round(triangles).toLocaleString()} triangles`;
+  $('about-anims').textContent = clips.length ? `${clips.length} animation${clips.length === 1 ? '' : 's'}` : 'None. This is a still model.';
+  highlightCurrent();
+  selectClip(0);
+  frame();
+  status(`Showing ${asset.name}`);
 }
+
+// Blob URLs from opened files cannot take a query string; repository files get a fresh version each open.
+function freshUrl(url) {
+  return url.startsWith('blob:') ? url : `${url}${url.includes('?') ? '&' : '?'}v=${Date.now()}`;
+}
+
 async function openAsset(asset) {
-  const ticket = ++loadId; status(`Loading ${asset.name}…`);
+  const ticket = ++loadId;
+  current = asset;
+  highlightCurrent();
+  status(`Loading ${asset.name}…`);
   try {
-    const url = asset.local ? asset.url : `${asset.url}${asset.url.includes('?') ? '&' : '?'}v=${Date.now()}`;
-    const gltf = asset.demo ? makeDemo() : await loader.loadAsync(url);
-    if(ticket !== loadId) {dispose(gltf.scene);return;}
-    const animationSets = await Promise.all((asset.animationSources || []).map(source => loader.loadAsync(`${source}${source.includes('?') ? '&' : '?'}v=${Date.now()}`)));
-    if(ticket !== loadId) {dispose(gltf.scene);for(const set of animationSets)dispose(set.scene);return;}
-    const clips = [], names = new Set();
+    const gltf = asset.demo ? makeDemo() : await loader.loadAsync(freshUrl(asset.url));
+    if (ticket !== loadId) { disposeObject(gltf.scene); return; }
+    const animationSets = await Promise.all((asset.animationSources || []).map(url => loader.loadAsync(freshUrl(url))));
+    if (ticket !== loadId) { disposeObject(gltf.scene); animationSets.forEach(set => disposeObject(set.scene)); return; }
+    const clipList = [], names = new Set();
     for (const clip of [...gltf.animations, ...animationSets.flatMap(set => set.animations)]) {
-      if (!names.has(clip.name)) { names.add(clip.name); clips.push(clip); }
+      if (!names.has(clip.name)) { names.add(clip.name); clipList.push(clip); }
     }
-    for (const set of animationSets) dispose(set.scene);
-    install(gltf.scene,clips,asset.name,asset.id);
+    animationSets.forEach(set => disposeObject(set.scene));
+    install(gltf.scene, clipList, asset);
+  } catch (error) {
+    if (ticket === loadId) status(`Could not open ${asset.name}. Export it from Blender as one self-contained .glb file, then try again.`, true);
+    console.error(error);
   }
-  catch(error) { if(ticket === loadId) status(`Could not load ${asset.name}. Use a self-contained GLB export.`,true); console.error(error); }
 }
-function addAsset(asset) {
-  assets.push(asset); const button = document.createElement('button'); button.className='asset'; button.dataset.id=asset.id;
-  const icon=document.createElement('span'); icon.className='asset-icon'; icon.textContent='⬡';
-  const title=document.createElement('span'); title.textContent=asset.name; const sub=document.createElement('small'); sub.textContent=asset.demo?'ANIMATION STUDY':asset.local?'LOCAL GLB':'REPOSITORY GLB'; title.append(sub); button.append(icon,title); button.onclick=()=>openAsset(asset); $('shelf').append(button);
+
+function highlightCurrent() {
+  for (const card of shelf.querySelectorAll('.card')) {
+    const selected = card.dataset.id === current?.id;
+    card.classList.toggle('selected', selected);
+    if (selected) card.setAttribute('aria-current', 'true');
+    else card.removeAttribute('aria-current');
+  }
 }
+
+function loadPreviewScene(asset) {
+  if (asset.demo) return Promise.resolve(makeDemo().scene);
+  return loader.loadAsync(asset.url).then(gltf => gltf.scene);
+}
+
+function showThumbnail(thumb, asset) {
+  thumbnails.request(asset.id, () => loadPreviewScene(asset)).then(dataUrl => {
+    if (!dataUrl || !thumb.isConnected) return;
+    const image = new Image();
+    image.alt = '';
+    image.src = dataUrl;
+    thumb.replaceChildren(image);
+  });
+}
+
+function onThumbVisible(entries) {
+  for (const entry of entries) {
+    if (!entry.isIntersecting) continue;
+    thumbObserver.unobserve(entry.target);
+    showThumbnail(entry.target, thumbOwners.get(entry.target));
+  }
+}
+
+function describe(asset) {
+  if (asset.kind === 'active') return `Active, updated ${formatUpdated(asset.updated)}`;
+  return asset.updated ? `Updated ${formatUpdated(asset.updated)}` : sourceLabel(asset);
+}
+
+function createCard(asset) {
+  const item = document.createElement('li');
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'card';
+  button.dataset.id = asset.id;
+  const thumb = document.createElement('span');
+  thumb.className = 'thumb';
+  thumb.textContent = asset.name.trim().charAt(0).toUpperCase();
+  const text = document.createElement('span');
+  text.className = 'card-text';
+  const name = document.createElement('span');
+  name.className = 'card-name';
+  name.textContent = asset.name;
+  const meta = document.createElement('span');
+  meta.className = 'card-meta';
+  meta.textContent = describe(asset);
+  text.append(name, meta);
+  button.append(thumb, text);
+  button.onclick = () => openAsset(asset);
+  item.append(button);
+  thumbOwners.set(thumb, asset);
+  if (thumbObserver) thumbObserver.observe(thumb);
+  else showThumbnail(thumb, asset);
+  return item;
+}
+
+function renderShelf() {
+  const query = $('search').value;
+  visible.splice(0, visible.length, ...newestFirst(assets).filter(asset => matchesSearch(asset, query)));
+  shelf.replaceChildren(...visible.map(createCard));
+  $('count').textContent = query.trim() ? `${visible.length} of ${assets.length}` : `${assets.length}`;
+  const empty = $('shelf-empty');
+  empty.hidden = visible.length > 0;
+  empty.textContent = assets.length ? `Nothing matches “${query.trim()}”.` : 'Loading creations…';
+  highlightCurrent();
+}
+
+// Arrow keys move through the list in the order it is shown.
+function step(direction) {
+  if (!visible.length) return;
+  const index = visible.findIndex(asset => asset.id === current?.id);
+  const next = index < 0 ? visible[direction > 0 ? 0 : visible.length - 1] : visible[(index + direction + visible.length) % visible.length];
+  openAsset(next);
+  shelf.querySelector(`[data-id="${next.id}"]`)?.scrollIntoView({ block: 'nearest' });
+}
+
 function importFiles(files) {
-  for(const file of files) { if(!file.name.toLowerCase().endsWith('.glb')) {status('Please choose a .glb file. Export glTF Binary from Blender.',true);continue;} const asset={id:crypto.randomUUID(),name:file.name.replace(/\.glb$/i,''),url:URL.createObjectURL(file),local:true}; addAsset(asset); openAsset(asset); }
+  const added = [];
+  for (const file of files) {
+    if (!file.name.toLowerCase().endsWith('.glb')) { status('That file is not a .glb. In Blender, use File > Export > glTF 2.0 and choose GLB.', true); continue; }
+    added.push({ id: crypto.randomUUID(), name: file.name.replace(/\.glb$/i, ''), url: URL.createObjectURL(file), kind: 'local', updated: new Date().toISOString() });
+  }
+  if (!added.length) return;
+  assets.push(...added);
+  renderShelf();
+  openAsset(added[0]);
 }
+
 function startNewCreation() {
   ++loadId;
-  if (root) { mixer?.stopAllAction(); if (mixer) mixer.uncacheRoot(root); scene.remove(root); dispose(root); }
-  root = undefined; mixer = undefined; action = undefined; clips = [];
-  currentName = 'New Creation';
-  $('title').textContent = 'New Creation';
-  $('metadata').textContent = 'Blank Blender scene · ready for Work';
-  $('clips').replaceChildren(new Option('No animations', ''));
-  $('clips').disabled = true;
-  for (const id of ['play','restart','timeline','speed','export']) $(id).disabled = true;
-  $('play').textContent = '▶'; $('play').setAttribute('aria-label', 'Play animation');
+  if (root) { mixer?.stopAllAction(); if (mixer) mixer.uncacheRoot(root); scene.remove(root); disposeObject(root); }
+  root = undefined; mixer = undefined; action = undefined; clips = []; clipIndex = 0; current = null;
+  $('title').textContent = 'New creation';
+  $('metadata').textContent = 'A blank Blender scene';
+  $('empty-stage').hidden = false;
+  $('about-source').textContent = 'Blank scene';
+  $('about-updated').textContent = '—';
+  $('about-size').textContent = '—';
+  $('about-anims').textContent = '—';
+  setTransportEnabled(false);
+  renderClips();
+  updatePlay();
   $('timeline').value = 0; $('time').textContent = '0.00 / 0.00 s';
+  for (const id of ['scale', 'yaw', 'wire', 'reset', 'export']) $(id).disabled = true;
   $('scale').value = 1; $('yaw').value = 0; $('wire').checked = false;
-  $('scale').disabled = true; $('yaw').disabled = true; $('wire').disabled = true;
-  document.querySelectorAll('.asset').forEach(button => button.classList.toggle('selected', button.dataset.id === 'active-creation'));
+  highlightCurrent();
   camera.position.set(5, 4, 7); orbit.target.set(0, 0, 0); camera.near = .01; camera.far = 10000; camera.updateProjectionMatrix(); orbit.update();
   grid.position.y = 0; grid.scale.setScalar(1);
-  status('Blank canvas selected. Ask Work to edit creations/active/scene.py, then rebuild.');
+  status('Blank scene ready. Ask Work to build it, and it will appear here.');
 }
-$('new').onclick=startNewCreation;
-$('open').onclick=()=>$('file').click(); $('file').onchange=e=>{importFiles(e.target.files); e.target.value='';};
-let dragDepth=0;
-viewport.addEventListener('dragenter',e=>{e.preventDefault();dragDepth++;viewport.classList.add('dragging');});
-viewport.addEventListener('dragover',e=>e.preventDefault());
-viewport.addEventListener('dragleave',()=>{if(--dragDepth<=0)viewport.classList.remove('dragging');});
-viewport.addEventListener('drop',e=>{e.preventDefault();dragDepth=0;viewport.classList.remove('dragging');importFiles(e.dataTransfer.files);});
-$('play').onclick=()=>{playing=!playing;updatePlay();}; $('restart').onclick=()=>{if(action){action.reset().play();mixer.update(0);}};
-$('clips').onchange=e=>selectClip(Number(e.target.value));
-$('timeline').oninput=e=>{if(action){action.time=Number(e.target.value)*action.getClip().duration;mixer.update(0);}};
-$('grid').onchange=e=>grid.visible=e.target.checked;
-$('wire').onchange=e=>root?.traverse(o=>{for(const material of o.material?(Array.isArray(o.material)?o.material:[o.material]):[]){if(!originalWire.has(material))originalWire.set(material,material.wireframe);material.wireframe=e.target.checked||originalWire.get(material);}});
-$('rotate').onchange=e=>orbit.autoRotate=e.target.checked;
-$('scale').onchange=e=>{const n=Number(e.target.value);if(n>=.01&&n<=100){root.scale.setScalar(n);frame();}else e.target.value=root.scale.x;};
-$('yaw').onchange=e=>{const n=Number(e.target.value);if(Number.isFinite(n))root.rotation.y=THREE.MathUtils.degToRad(n);};
-$('frame').onclick=()=>frame(); $('front').onclick=()=>frame(new THREE.Vector3(0,.25,1)); $('side').onclick=()=>frame(new THREE.Vector3(1,.25,0));
-function download(blob,name) { const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000); }
-$('shot').onclick=()=>{renderer.render(scene,camera);renderer.domElement.toBlob(blob=>{if(blob)download(blob,`${currentName}.png`);});};
-$('export').onclick=async()=>{if(!root)return;const button=$('export');button.disabled=true;status('Exporting GLB…');try{const buffer=await new GLTFExporter().parseAsync(root,{binary:true,animations:clips});download(new Blob([buffer],{type:'model/gltf-binary'}),`${currentName}-lab.glb`);status('GLB exported with animations and transforms');}catch(error){status('Export failed. See browser console for details.',true);console.error(error);}finally{button.disabled=false;}};
-window.addEventListener('keydown',e=>{if(/INPUT|SELECT|TEXTAREA/.test(e.target.tagName))return;if(e.code==='Space'){e.preventDefault();if(action)$('play').click();}if(e.key.toLowerCase()==='f')frame();});
-new ResizeObserver(()=>{const w=viewport.clientWidth,h=viewport.clientHeight;renderer.setSize(w,h);camera.aspect=w/h;camera.updateProjectionMatrix();}).observe(viewport);
-const clock=new THREE.Clock();
-renderer.setAnimationLoop(()=>{const delta=Math.min(clock.getDelta(),.1);if(mixer&&playing)mixer.update(delta*Number($('speed').value));orbit.update();renderer.render(scene,camera);const duration=action?.getClip().duration||0,time=action?.time||0;$('timeline').value=duration?time/duration:0;$('time').textContent=`${time.toFixed(2)} / ${duration.toFixed(2)} s`;});
-const demo = {id:'demo',name:'Studio moth',demo:true};
-addAsset(demo);
-fetch(`${import.meta.env.BASE_URL}models/manifest.json`).then(r=>{if(!r.ok)throw Error('Manifest unavailable');return r.json();}).then(entries=>{if(!Array.isArray(entries))throw Error('Manifest must be an array');const modelBase=new URL(`${import.meta.env.BASE_URL}models/`,location.href);const repositoryAssets=entries.map(entry=>{if(typeof entry.name!=='string'||typeof entry.file!=='string')throw Error('Each manifest entry needs name and file');return {id:entry.file==='active-creation.glb'?'active-creation':crypto.randomUUID(),name:entry.name,url:new URL(entry.file,modelBase).href,animationSources:Array.isArray(entry.animationSources)?entry.animationSources.map(source=>new URL(source.file,modelBase).href):[]};});for(const asset of repositoryAssets)addAsset(asset);if(repositoryAssets.length)openAsset(repositoryAssets.find(asset=>asset.id==='active-creation')||repositoryAssets[0]); else openAsset(demo);}).catch(error=>status(`Model shelf: ${error.message}`,true));
-window.addEventListener('beforeunload',()=>assets.filter(a=>a.local).forEach(a=>URL.revokeObjectURL(a.url)));
+
+function download(blob, name) {
+  const url = URL.createObjectURL(blob), link = document.createElement('a');
+  link.href = url; link.download = name; link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+$('new').onclick = startNewCreation;
+$('open').onclick = () => $('file').click();
+$('file').onchange = event => { importFiles(event.target.files); event.target.value = ''; };
+$('search').addEventListener('input', renderShelf);
+$('clip-filter').addEventListener('input', renderClips);
+
+let dragDepth = 0;
+viewport.addEventListener('dragenter', event => { event.preventDefault(); dragDepth++; viewport.classList.add('dragging'); });
+viewport.addEventListener('dragover', event => event.preventDefault());
+viewport.addEventListener('dragleave', () => { if (--dragDepth <= 0) viewport.classList.remove('dragging'); });
+viewport.addEventListener('drop', event => { event.preventDefault(); dragDepth = 0; viewport.classList.remove('dragging'); importFiles(event.dataTransfer.files); });
+
+$('play').onclick = () => { playing = !playing; updatePlay(); };
+$('restart').onclick = () => { if (action) { action.reset().play(); mixer.update(0); } };
+$('timeline').oninput = event => { if (action) { action.time = Number(event.target.value) * action.getClip().duration; mixer.update(0); } };
+$('grid').onchange = event => { grid.visible = event.target.checked; };
+$('wire').onchange = event => root?.traverse(node => {
+  for (const material of node.material ? [node.material].flat() : []) {
+    if (!originalWire.has(material)) originalWire.set(material, material.wireframe);
+    material.wireframe = event.target.checked || originalWire.get(material);
+  }
+});
+$('rotate').onchange = event => { orbit.autoRotate = event.target.checked; };
+$('scale').onchange = event => {
+  const value = Number(event.target.value);
+  if (!root) return;
+  if (value >= .01 && value <= 100) { root.scale.setScalar(value); frame(); }
+  else event.target.value = root.scale.x;
+};
+$('yaw').onchange = event => {
+  const value = Number(event.target.value);
+  if (root && Number.isFinite(value)) root.rotation.y = THREE.MathUtils.degToRad(value);
+};
+$('reset').onclick = () => {
+  if (!root) return;
+  root.scale.setScalar(1); root.rotation.y = 0;
+  $('scale').value = 1; $('yaw').value = 0;
+  frame();
+};
+$('frame').onclick = () => frame();
+$('front').onclick = () => frame(new THREE.Vector3(0, .25, 1));
+$('side').onclick = () => frame(new THREE.Vector3(1, .25, 0));
+$('shot').onclick = () => {
+  renderer.render(scene, camera);
+  renderer.domElement.toBlob(blob => { if (blob) download(blob, `${current?.name ?? 'Blender Lab'}.png`); });
+};
+$('export').onclick = async () => {
+  if (!root) return;
+  const button = $('export');
+  button.disabled = true;
+  status('Preparing the GLB download…');
+  try {
+    const buffer = await new GLTFExporter().parseAsync(root, { binary: true, animations: clips });
+    download(new Blob([buffer], { type: 'model/gltf-binary' }), `${current?.name ?? 'creation'}-lab.glb`);
+    status('Downloaded a GLB copy with its animations and transforms');
+  } catch (error) {
+    status('The download failed. Check the browser console for details.', true);
+    console.error(error);
+  } finally {
+    button.disabled = false;
+  }
+};
+
+window.addEventListener('keydown', event => {
+  if (/INPUT|SELECT|TEXTAREA/.test(event.target.tagName) || event.metaKey || event.ctrlKey || event.altKey) return;
+  if (event.code === 'Space' && event.target.tagName !== 'BUTTON') {
+    if (action) { event.preventDefault(); $('play').click(); }
+  } else if (event.key.toLowerCase() === 'f') {
+    frame();
+  } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+    event.preventDefault();
+    step(event.key === 'ArrowDown' ? 1 : -1);
+  }
+});
+
+new ResizeObserver(() => {
+  const width = viewport.clientWidth, height = viewport.clientHeight;
+  renderer.setSize(width, height);
+  camera.aspect = width / height;
+  camera.updateProjectionMatrix();
+}).observe(viewport);
+
+const timer = new THREE.Timer();
+renderer.setAnimationLoop(() => {
+  timer.update();
+  const delta = Math.min(timer.getDelta(), .1);
+  if (mixer && playing) mixer.update(delta * Number($('speed').value));
+  orbit.update();
+  renderer.render(scene, camera);
+  const duration = action?.getClip().duration || 0, time = action?.time || 0;
+  $('timeline').value = duration ? time / duration : 0;
+  $('time').textContent = `${time.toFixed(2)} / ${duration.toFixed(2)} s`;
+});
+
+updatePlay();
+renderClips();
+fetch(`${import.meta.env.BASE_URL}models/manifest.json`)
+  .then(response => { if (!response.ok) throw Error('Manifest unavailable'); return response.json(); })
+  .then(entries => {
+    if (!Array.isArray(entries)) throw Error('Manifest must be an array');
+    const modelBase = new URL(`${import.meta.env.BASE_URL}models/`, location.href);
+    const shelfAssets = entries.map(entry => {
+      if (typeof entry.name !== 'string' || typeof entry.file !== 'string') throw Error('Each manifest entry needs name and file');
+      const active = entry.file === 'active-creation.glb';
+      return {
+        id: active ? 'active-creation' : crypto.randomUUID(),
+        name: entry.name,
+        url: new URL(entry.file, modelBase).href,
+        kind: active ? 'active' : 'repository',
+        updated: typeof entry.updated === 'string' ? entry.updated : undefined,
+        sourceRepository: entry.sourceRepository,
+        animationSources: Array.isArray(entry.animationSources) ? entry.animationSources.map(source => new URL(source.file, modelBase).href) : [],
+      };
+    });
+    assets.push(...shelfAssets, demo);
+    renderShelf();
+    openAsset(shelfAssets.find(asset => asset.id === 'active-creation') || shelfAssets[0] || demo);
+  })
+  .catch(error => {
+    assets.push(demo);
+    renderShelf();
+    $('shelf-empty').hidden = false;
+    $('shelf-empty').textContent = `The creations list did not load: ${error.message}`;
+    $('empty-stage').hidden = false;
+    status(`Creations list: ${error.message}`, true);
+    openAsset(demo);
+  });
+window.addEventListener('beforeunload', () => assets.filter(asset => asset.kind === 'local').forEach(asset => URL.revokeObjectURL(asset.url)));

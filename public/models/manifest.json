@@ -1,177 +1,207 @@
 [
   {
     "name": "Active Creation",
-    "file": "active-creation.glb"
+    "file": "active-creation.glb",
+    "updated": "2026-10-18T21:32:24+00:00"
   },
   {
     "name": "Alien Flying Saucer",
-    "file": "Alien-Flying-Saucer.glb"
+    "file": "Alien-Flying-Saucer.glb",
+    "updated": "2026-10-17T15:17:48+00:00"
   },
   {
     "name": "Blackfin Reef Shark",
     "file": "Paradise_Island_Blackfin_Reef_Shark.glb",
+    "updated": "2026-10-17T16:24:06+00:00",
     "sourceRepository": "madema-art/Paradise-island",
     "sourcePath": "assets/Paradise_Island_Blackfin_Reef_Shark.glb"
   },
   {
     "name": "Dolphin Animation Rig",
     "file": "Paradise_Island_Dolphin_Animation_Rig.glb",
+    "updated": "2026-10-17T16:24:06+00:00",
     "sourceRepository": "madema-art/Paradise-island",
     "sourcePath": "assets/Paradise_Island_Dolphin_Animation_Rig.glb"
   },
   {
     "name": "Dolphin Family",
     "file": "Paradise_Island_Dolphin_Family.glb",
+    "updated": "2026-10-17T16:24:06+00:00",
     "sourceRepository": "madema-art/Paradise-island",
     "sourcePath": "assets/Paradise_Island_Dolphin_Family.glb"
   },
   {
     "name": "Green Sea Turtle",
     "file": "Paradise_Island_Green_Sea_Turtle.glb",
+    "updated": "2026-10-17T16:24:06+00:00",
     "sourceRepository": "madema-art/Paradise-island",
     "sourcePath": "assets/Paradise_Island_Green_Sea_Turtle.glb"
   },
   {
     "name": "Humpback Whale",
     "file": "Paradise_Island_Humpback_Whale.glb",
+    "updated": "2026-10-17T16:24:06+00:00",
     "sourceRepository": "madema-art/Paradise-island",
     "sourcePath": "assets/Paradise_Island_Humpback_Whale.glb"
   },
   {
     "name": "Silver Gull — Adult",
     "file": "Paradise_Island_Silver_Gull_Adult.glb",
+    "updated": "2026-10-17T16:24:06+00:00",
     "sourceRepository": "madema-art/Paradise-island",
     "sourcePath": "assets/Paradise_Island_Silver_Gull_Adult.glb"
   },
   {
     "name": "Silver Gull — Juvenile",
     "file": "Paradise_Island_Silver_Gull_Juvenile.glb",
+    "updated": "2026-10-17T16:24:06+00:00",
     "sourceRepository": "madema-art/Paradise-island",
     "sourcePath": "assets/Paradise_Island_Silver_Gull_Juvenile.glb"
   },
   {
     "name": "Barn Owl",
     "file": "barn_owl.glb",
+    "updated": "2026-10-17T16:24:06+00:00",
     "sourceRepository": "madema-art/Paradise-island",
     "sourcePath": "assets/barn_owl.glb"
   },
   {
     "name": "Boar",
     "file": "boar.glb",
+    "updated": "2026-10-17T16:24:06+00:00",
     "sourceRepository": "madema-art/Paradise-island",
     "sourcePath": "assets/boar.glb"
   },
   {
     "name": "Cave",
     "file": "cave.glb",
+    "updated": "2026-10-17T16:24:06+00:00",
     "sourceRepository": "madema-art/Paradise-island",
     "sourcePath": "assets/cave.glb"
   },
   {
     "name": "Crab",
     "file": "crab.glb",
+    "updated": "2026-10-17T16:24:06+00:00",
     "sourceRepository": "madema-art/Paradise-island",
     "sourcePath": "assets/crab.glb"
   },
   {
     "name": "Flamingo",
     "file": "flamingo.glb",
+    "updated": "2026-10-17T16:24:06+00:00",
     "sourceRepository": "madema-art/Paradise-island",
     "sourcePath": "assets/flamingo.glb"
   },
   {
     "name": "Fruit Bat",
     "file": "fruitbat.glb",
+    "updated": "2026-10-17T16:24:06+00:00",
     "sourceRepository": "madema-art/Paradise-island",
     "sourcePath": "assets/fruitbat.glb"
   },
   {
     "name": "Great Frigatebird — Female",
     "file": "great_frigatebird_female.glb",
+    "updated": "2026-10-17T16:24:06+00:00",
     "sourceRepository": "madema-art/Paradise-island",
     "sourcePath": "assets/great_frigatebird_female.glb"
   },
   {
     "name": "Great Frigatebird — Juvenile",
     "file": "great_frigatebird_juvenile.glb",
+    "updated": "2026-10-17T16:24:06+00:00",
     "sourceRepository": "madema-art/Paradise-island",
     "sourcePath": "assets/great_frigatebird_juvenile.glb"
   },
   {
     "name": "Great Frigatebird — Male",
     "file": "great_frigatebird_male.glb",
+    "updated": "2026-10-17T16:24:06+00:00",
     "sourceRepository": "madema-art/Paradise-island",
     "sourcePath": "assets/great_frigatebird_male.glb"
   },
   {
     "name": "Island Rat",
     "file": "island_rat.glb",
+    "updated": "2026-10-17T16:24:06+00:00",
     "sourceRepository": "madema-art/Paradise-island",
     "sourcePath": "assets/island_rat.glb"
   },
   {
     "name": "Lorikeet — Adult",
     "file": "lorikeet_adult.glb",
+    "updated": "2026-10-17T16:24:06+00:00",
     "sourceRepository": "madema-art/Paradise-island",
     "sourcePath": "assets/lorikeet_adult.glb"
   },
   {
     "name": "Lorikeet — Juvenile",
     "file": "lorikeet_juvenile.glb",
+    "updated": "2026-10-17T16:24:06+00:00",
     "sourceRepository": "madema-art/Paradise-island",
     "sourcePath": "assets/lorikeet_juvenile.glb"
   },
   {
     "name": "Pacific Boa",
     "file": "pacific_boa.glb",
+    "updated": "2026-10-17T16:24:06+00:00",
     "sourceRepository": "madema-art/Paradise-island",
     "sourcePath": "assets/pacific_boa.glb"
   },
   {
     "name": "Sea Eagle — Adult",
     "file": "sea_eagle_adult.glb",
+    "updated": "2026-10-17T16:24:06+00:00",
     "sourceRepository": "madema-art/Paradise-island",
     "sourcePath": "assets/sea_eagle_adult.glb"
   },
   {
     "name": "Sea Eagle — Juvenile",
     "file": "sea_eagle_juvenile.glb",
+    "updated": "2026-10-17T16:24:06+00:00",
     "sourceRepository": "madema-art/Paradise-island",
     "sourcePath": "assets/sea_eagle_juvenile.glb"
   },
   {
     "name": "Tern",
     "file": "tern.glb",
+    "updated": "2026-10-17T16:24:06+00:00",
     "sourceRepository": "madema-art/Paradise-island",
     "sourcePath": "assets/tern.glb"
   },
   {
     "name": "Yellow Tang",
     "file": "yellow_tang.glb",
+    "updated": "2026-10-17T16:24:06+00:00",
     "sourceRepository": "madema-art/Paradise-island",
     "sourcePath": "assets/yellow_tang.glb"
   },
   {
     "name": "Castaway Staff",
     "file": "Staff.glb",
+    "updated": "2026-10-17T16:24:06+00:00",
     "sourceRepository": "madema-art/Paradise-island",
     "sourcePath": "assets/castaway/Staff.glb"
   },
   {
     "name": "Capuchin Monkey",
     "file": "Monkey.glb",
+    "updated": "2026-10-17T16:24:06+00:00",
     "sourceRepository": "madema-art/Paradise-island",
     "sourcePath": "assets/monkey/Monkey.glb"
   },
   {
     "name": "Coconut",
     "file": "coconut.glb",
+    "updated": "2026-10-17T16:24:06+00:00",
     "sourceRepository": "madema-art/Paradise-island",
     "sourcePath": "assets/monkey/coconut.glb"
   },
   {
     "name": "Castaway",
     "file": "Castaway.glb",
+    "updated": "2026-10-17T16:24:06+00:00",
     "sourceRepository": "madema-art/Paradise-island",
     "sourcePath": "assets/castaway/Castaway.glb",
     "animationSources": [
