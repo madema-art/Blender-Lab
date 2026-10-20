@@ -1,9 +1,7 @@
-"""Low-poly lighthouse on a rocky islet for Blender Lab's active creation."""
+"""Brutal green orc with tusks, spiked shoulders, and a rusted axe for Blender Lab's active creation."""
 
-import bmesh
 import bpy
 import math
-import random
 
 
 def material(name, color, roughness=0.6, emission=0.0):
@@ -18,22 +16,23 @@ def material(name, color, roughness=0.6, emission=0.0):
     return mat
 
 
-stone = material("Weathered stone", (0.36, 0.34, 0.31), 0.9)
-white = material("Lighthouse white", (0.94, 0.93, 0.88), 0.5)
-red = material("Lighthouse red", (0.74, 0.12, 0.09), 0.5)
-iron = material("Iron gallery", (0.10, 0.11, 0.12), 0.4)
-brass = material("Brass finial", (0.85, 0.62, 0.25), 0.3)
-lamp = material("Lamp glass", (1.0, 0.80, 0.40), 0.1, emission=6.0)
-window = material("Window glass", (0.12, 0.22, 0.30), 0.1)
-oak = material("Oak door", (0.27, 0.16, 0.09), 0.7)
-sea = material("Deep teal sea", (0.04, 0.27, 0.34), 0.15)
+skin = material("Ugly green skin", (0.22, 0.40, 0.14), 0.7)
+skin_dark = material("Bruised green skin", (0.12, 0.24, 0.07), 0.75)
+bone = material("Yellowed bone", (0.86, 0.80, 0.66), 0.45)
+leather = material("Filthy leather", (0.27, 0.16, 0.08), 0.8)
+iron = material("Rusted iron", (0.32, 0.30, 0.28), 0.5)
+wound = material("Dried blood", (0.35, 0.05, 0.04), 0.5)
+eye_glow = material("Angry eyes", (1.0, 0.35, 0.05), 0.2, emission=4.0)
+dark = material("Matted hair", (0.08, 0.07, 0.05), 0.9)
+mouth = material("Dark mouth", (0.18, 0.03, 0.03), 0.6)
 
 
-def place(kind, name, mat, location, scale=(1, 1, 1), **options):
+def place(kind, name, mat, location, scale=(1, 1, 1), rotation=(0, 0, 0), **options):
     getattr(bpy.ops.mesh, f"primitive_{kind}_add")(location=location, **options)
     obj = bpy.context.object
     obj.name = name
     obj.scale = scale
+    obj.rotation_euler = rotation
     obj.data.materials.append(mat)
     return obj
 
@@ -44,78 +43,63 @@ def smooth(obj):
     return obj
 
 
-# Water and islet. Cubes keep Blender's default size of 2, so their scale is a half-extent.
-place("cylinder", "Sea | Water", sea, (0, 0, -0.02), vertices=48, radius=5.0, depth=0.04)
+# Legs and feet. Cubes keep Blender's default size of 2, so their scale is a half-extent.
+for side, x in (("left", -0.2), ("right", 0.2)):
+    smooth(place("cylinder", f"Orc | {side.title()} thigh", skin, (x, 0, 0.73), vertices=16, radius=0.16, depth=0.6))
+    smooth(place("cylinder", f"Orc | {side.title()} calf", skin_dark, (x, 0.02, 0.27), vertices=16, radius=0.13, depth=0.52))
+    place("cube", f"Orc | {side.title()} foot", leather, (x, 0.1, 0.07), scale=(0.14, 0.27, 0.07))
 
-rng = random.Random(7)
-rock = smooth(place("ico_sphere", "Islet | Rock", stone, (0, 0, 0), (1, 1, 0.35), subdivisions=3, radius=1.6))
-for vertex in rock.data.vertices:
-    vertex.co *= 1 + rng.uniform(-0.08, 0.08)
-
-for index, (x, y, z, radius) in enumerate(((-1.35, -0.85, 0.02, 0.32), (1.30, -1.05, -0.02, 0.22), (-0.20, -1.60, 0.0, 0.28))):
-    smooth(place("ico_sphere", f"Islet | Shore stone {index + 1}", stone, (x, y, z), (1, 1, 0.6), subdivisions=2, radius=radius))
-
-
-# Striped tapering tower, one band per 0.5 units of height.
-TOWER_BOTTOM = 0.4
-TOWER_HEIGHT = 3.0
-
-
-def tower_radius(z):
-    return 0.62 - 0.22 * (z - TOWER_BOTTOM) / TOWER_HEIGHT
+# Hips, gut, and chest. The gut hangs forward over a leather loincloth.
+smooth(place("uv_sphere", "Orc | Hips", skin, (0, 0, 0.98), (0.3, 0.26, 0.26), segments=20, ring_count=12, radius=1))
+smooth(place("uv_sphere", "Orc | Gut", skin, (0, -0.04, 1.18), (0.44, 0.34, 0.3), segments=24, ring_count=14, radius=1))
+smooth(place("uv_sphere", "Orc | Chest", skin, (0, 0, 1.56), (0.5, 0.34, 0.5), segments=28, ring_count=16, radius=1))
+place("cube", "Orc | Loincloth", leather, (0, -0.25, 0.85), scale=(0.22, 0.04, 0.28))
+for x in (-0.2, 0.2):
+    smooth(place("uv_sphere", f"Orc | Pec muscle {x:+.1f}", skin_dark, (x, -0.31, 1.6), (0.2, 0.06, 0.18), segments=16, ring_count=10, radius=1))
+for index, rotation_z in enumerate((0.55, 0.45, 0.6)):
+    place("cylinder", f"Orc | Chest scar {index + 1}", wound, (0.0, -0.36, 1.42 + index * 0.14), rotation=(math.pi / 2, 0, rotation_z), vertices=6, radius=0.012, depth=0.32)
 
 
-for band in range(6):
-    z0 = TOWER_BOTTOM + band * 0.5
-    z1 = z0 + 0.5
-    place(
-        "cone",
-        f"Lighthouse | Tower band {band + 1}",
-        white if band % 2 == 0 else red,
-        (0, 0, (z0 + z1) / 2),
-        vertices=24,
-        radius1=tower_radius(z0),
-        radius2=tower_radius(z1),
-        depth=0.5,
-    )
-
-place("cube", "Lighthouse | Oak door", oak, (0, -0.6, 0.64), scale=(0.14, 0.05, 0.22))
-place("cube", "Lighthouse | Tower window", window, (0, -0.5, 2.1), scale=(0.07, 0.04, 0.1))
+# Thick neck and bulging shoulders with bone spikes.
+place("cylinder", "Orc | Neck", skin_dark, (0, 0, 2.1), vertices=14, radius=0.17, depth=0.3)
+for side, x, angle in (("left", -0.5, -1.0), ("right", 0.5, 1.0)):
+    smooth(place("uv_sphere", f"Orc | {side.title()} shoulder", skin, (x, 0, 1.98), (0.2, 0.2, 0.18), segments=16, ring_count=10, radius=1))
+    place("cone", f"Orc | {side.title()} shoulder spike", bone, (x * 1.12, 0, 2.2), rotation=(0, angle, 0), vertices=6, radius1=0.07, radius2=0.0, depth=0.36)
 
 
-# Gallery, railing, and lantern room.
-place("cylinder", "Lighthouse | Gallery", iron, (0, 0, 3.44), vertices=24, radius=0.54, depth=0.08)
-for post in range(12):
-    angle = post * math.tau / 12
-    place("cylinder", f"Lighthouse | Railing post {post + 1}", iron, (0.5 * math.cos(angle), 0.5 * math.sin(angle), 3.58), vertices=8, radius=0.018, depth=0.2)
-place("torus", "Lighthouse | Railing", iron, (0, 0, 3.68), major_segments=32, minor_segments=6, major_radius=0.5, minor_radius=0.022)
-
-place("cylinder", "Lighthouse | Lamp glass", lamp, (0, 0, 3.79), vertices=12, radius=0.28, depth=0.62)
-for post in range(8):
-    angle = post * math.tau / 8
-    place("cylinder", f"Lighthouse | Lantern frame {post + 1}", iron, (0.3 * math.cos(angle), 0.3 * math.sin(angle), 3.79), vertices=6, radius=0.02, depth=0.62)
-place("cone", "Lighthouse | Lantern roof", red, (0, 0, 4.28), vertices=12, radius1=0.38, radius2=0.03, depth=0.36)
-smooth(place("uv_sphere", "Lighthouse | Brass finial", brass, (0, 0, 4.48), segments=12, ring_count=8, radius=0.07))
+# Arms: heavy upper arms, forearms, and fists. The right fist grips the axe.
+for side, x in (("left", -0.6), ("right", 0.6)):
+    smooth(place("cylinder", f"Orc | {side.title()} upper arm", skin, (x, 0, 1.6), rotation=(0, -x * 0.25, 0), vertices=16, radius=0.14, depth=0.62))
+    smooth(place("cylinder", f"Orc | {side.title()} forearm", skin_dark, (x * 1.05, -0.08, 1.1), rotation=(0.25, 0, 0), vertices=16, radius=0.12, depth=0.56))
+    smooth(place("ico_sphere", f"Orc | {side.title()} fist", skin, (x * 1.05, -0.16, 0.8), (1, 1.1, 0.9), subdivisions=2, radius=0.16))
 
 
-# Keeper's house tucked against the rock, with a gable roof built from explicit faces.
-HOUSE_X, HOUSE_Y = 1.05, 0.15
-place("cube", "Keeper house | Walls", white, (HOUSE_X, HOUSE_Y, 0.48), scale=(0.36, 0.3, 0.26))
-place("cube", "Keeper house | Door", oak, (HOUSE_X - 0.36, HOUSE_Y, 0.4), scale=(0.04, 0.09, 0.16))
-place("cube", "Keeper house | Window", window, (HOUSE_X, HOUSE_Y - 0.3, 0.62), scale=(0.1, 0.03, 0.08))
+# Axe in the right hand: a long haft with a notched iron blade.
+place("cylinder", "Orc | Axe haft", leather, (0.7, -0.25, 0.95), rotation=(0.2, 0, 0), vertices=8, radius=0.03, depth=1.1)
+place("cube", "Orc | Axe blade", iron, (0.7, -0.25, 1.5), scale=(0.03, 0.24, 0.16))
+place("cone", "Orc | Axe blade point", iron, (0.7, -0.5, 1.5), rotation=(math.pi / 2, 0, 0), vertices=4, radius1=0.12, radius2=0.0, depth=0.18)
 
-roof_points = [(-0.42, -0.36, 0.74), (0.42, -0.36, 0.74), (0.42, 0.0, 1.02), (-0.42, 0.0, 1.02), (-0.42, 0.36, 0.74), (0.42, 0.36, 0.74)]
-roof_faces = [(0, 1, 2, 3), (3, 2, 5, 4), (0, 3, 4), (1, 5, 2)]
-roof_mesh = bpy.data.meshes.new("Keeper house roof mesh")
-roof_mesh.from_pydata(roof_points, [], roof_faces)
-roof_mesh.update()
-# Recalculate winding so the roof faces outward and renders from every viewing angle.
-bm = bmesh.new()
-bm.from_mesh(roof_mesh)
-bmesh.ops.recalc_face_normals(bm, faces=bm.faces[:])
-bm.to_mesh(roof_mesh)
-bm.free()
-roof_mesh.materials.append(red)
-roof = bpy.data.objects.new("Keeper house | Roof", roof_mesh)
-roof.location = (HOUSE_X, HOUSE_Y, 0)
-bpy.context.collection.objects.link(roof)
+
+# Head: a squat skull with a heavy brow, sunken eyes, a flat broken nose, and a jutting jaw.
+smooth(place("uv_sphere", "Orc | Skull", skin, (0, 0, 2.45), (0.29, 0.32, 0.33), segments=28, ring_count=16, radius=1))
+smooth(place("uv_sphere", "Orc | Brow ridge", skin_dark, (0, -0.3, 2.5), (0.3, 0.12, 0.08), segments=20, ring_count=10, radius=1))
+for side, x in (("left", -0.12), ("right", 0.12)):
+    place("uv_sphere", f"Orc | {side.title()} eye socket", dark, (x, -0.26, 2.44), (0.07, 0.05, 0.05), segments=12, ring_count=8, radius=1)
+    place("uv_sphere", f"Orc | {side.title()} eye", eye_glow, (x, -0.29, 2.44), segments=10, ring_count=6, radius=0.03)
+smooth(place("uv_sphere", "Orc | Broken nose", skin_dark, (0, -0.3, 2.35), (0.07, 0.06, 0.09), segments=12, ring_count=8, radius=1))
+smooth(place("uv_sphere", "Orc | Jaw", skin, (0, -0.18, 2.2), (0.27, 0.21, 0.14), segments=20, ring_count=12, radius=1))
+place("uv_sphere", "Orc | Mouth", mouth, (0, -0.3, 2.27), (0.2, 0.04, 0.05), segments=12, ring_count=8, radius=1)
+for side, x in (("left", -0.14), ("right", 0.14)):
+    place("cone", f"Orc | {side.title()} tusk", bone, (x, -0.3, 2.3), rotation=(0.2, 0, -x * 1.2), vertices=10, radius1=0.05, radius2=0.0, depth=0.38)
+for index, x in enumerate((-0.08, -0.03, 0.03, 0.08)):
+    place("cone", f"Orc | Lower tooth {index + 1}", bone, (x, -0.31, 2.25), vertices=6, radius1=0.015, radius2=0.0, depth=0.05)
+for side, x in (("left", -0.3), ("right", 0.3)):
+    smooth(place("cone", f"Orc | {side.title()} ear", skin, (x, 0.02, 2.5), rotation=(0, math.copysign(math.pi / 2, x), 0), vertices=10, radius1=0.07, radius2=0.0, depth=0.3))
+place("cylinder", "Orc | Cheek scar", wound, (0.15, -0.27, 2.35), rotation=(math.pi / 2, 0, 0.6), vertices=6, radius=0.01, depth=0.12)
+for index, (x, z) in enumerate(((-0.2, 2.32), (0.1, 2.2))):
+    smooth(place("uv_sphere", f"Orc | Wart {index + 1}", skin_dark, (x, -0.27, z), segments=8, ring_count=6, radius=0.03))
+
+# Spiky matted ridge running back over the skull.
+for index, y in enumerate((0.16, 0.04, -0.08, -0.2)):
+    height = 0.3 - index * 0.03
+    place("cone", f"Orc | Scalp spike {index + 1}", dark, (0, y, 2.76 - index * 0.02), rotation=(-0.3, 0, 0), vertices=6, radius1=0.06, radius2=0.0, depth=height)
