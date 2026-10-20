@@ -2,7 +2,7 @@
   {
     "name": "Active Creation",
     "file": "active-creation.glb",
-    "updated": "2026-10-20T14:14:06+00:00"
+    "updated": "2026-10-20T19:14:13+00:00"
   },
   {
     "name": "Alien Flying Saucer",
@@ -252,5 +252,11 @@
       }
     ],
     "animationCount": 173
+  },
+  {
+    "name": "Green Orc",
+    "file": "green-orc.glb",
+    "updated": "2026-10-20T14:14:06+00:00",
+    "creationSource": "creations/green-orc/scene.py"
   }
 ]
