@@ -29,6 +29,7 @@ The builder resets Blender to a blank scene, executes the source, exports a self
 ### Working with Work
 
 - Click **New Creation** to clear the canvas and begin from a blank creation. Then prompt Work to create or edit the active Blender scene. Work resets `creations/active/scene.py` to an empty scene for a new creation, or reads and modifies its current contents for an edit.
+- Each finished creation is saved as its own library entry. Work runs `python3 tools/save_creation.py --name "<Name>"` before starting a new creation, so earlier creations stay in the library.
 - For example: “Start with a cube,” “Make it into a canoe,” or “Add wooden ribs.” Work should update the active Python source, run the builder above, inspect the generated GLB, and commit both files to `main`.
 - The server window pulls those commits automatically. The Vite watcher reloads the open canvas when the manifest or a model file changes.
 
