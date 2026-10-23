@@ -2,7 +2,7 @@
   {
     "name": "Active Creation",
     "file": "active-creation.glb",
-    "updated": "2026-10-20T19:14:13+00:00"
+    "updated": "2026-10-23T20:51:53+00:00"
   },
   {
     "name": "Alien Flying Saucer",
@@ -258,5 +258,11 @@
     "file": "green-orc.glb",
     "updated": "2026-10-20T14:14:06+00:00",
     "creationSource": "creations/green-orc/scene.py"
+  },
+  {
+    "name": "Glowing Glass Cube",
+    "file": "glowing-glass-cube.glb",
+    "updated": "2026-10-20T19:14:13+00:00",
+    "creationSource": "creations/glowing-glass-cube/scene.py"
   }
 ]
