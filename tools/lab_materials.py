@@ -40,9 +40,10 @@ import numpy as np
 
 DEFAULTS = {
     "name": "Creation",
-    "atlas_size": 1024,       # body atlas: base colour, ORM, normal
+    "atlas_size": 1024,       # body atlas base colour
+    "atlas_data_size": None,  # body atlas ORM and normal maps; None matches atlas_size
     "card_size": 1024,        # feather card atlas
-    "eye_size": 256,
+    "eye_size": 512,
     "ao_distance": 0.35,      # metres; how far baked ambient occlusion looks
     "ao_samples": 48,
     "card_ao_distance": 0.06, # metres; shorter, so only overlapping feather layers shade each other
@@ -53,7 +54,7 @@ DEFAULTS = {
     "jpeg_quality": 90,
 }
 
-ATLAS_RECIPES = ("plain", "fur", "plumage", "skin", "scales", "keratin", "leather", "metal", "wood", "stone")
+ATLAS_RECIPES = ("plain", "fur", "plumage", "skin", "scales", "keratin", "leather", "metal", "wood", "stone", "blend")
 CARD_RECIPES = ("feather", "eye")
 
 
@@ -73,7 +74,10 @@ def surface(name, recipe, color, **params):
     """Create a lab material. `color` is linear RGB. Common params: color2, scale (pattern size in
     metres), roughness, metallic, variation (0-1 tonal variation), bump (normal strength) and
     texel (atlas area weight; 2 doubles a part's texture resolution). Recipe-specific params are
-    documented on each recipe below."""
+    documented on each recipe below. The "blend" recipe crossfades two atlas recipes across the
+    body: a=(recipe, params), b=(recipe, params), axis ("x", "y" or "z"), start and end positions
+    along it in metres, and `noise` (metres of ragged edge) - for transitions such as feathers into
+    fur. Card recipes accept `jitter` (0-0.2): per-piece random variation of value and warmth."""
     if recipe not in ATLAS_RECIPES + CARD_RECIPES:
         raise ValueError(f"unknown recipe '{recipe}'; choose from {ATLAS_RECIPES + CARD_RECIPES}")
     mat = bpy.data.materials.new(name=name)
@@ -345,14 +349,26 @@ def _recipe_plain(g, p):
 
 def _recipe_fur(g, p):
     """Short pelt: streaks along `flow` ("x", "y" or "z"), soft clumps, optional countershading
-    with `belly=(low_z, high_z)` blending from color2 below to color above."""
+    with `belly=(low_z, high_z)` blending from color2 below to color above. `leg_flow` with
+    `legs=(low_z, high_z)` turns the streaks to run along the legs below that height, `dorsal`
+    =(low_z, high_z) darkens towards color3 along the back, and `mottle` (0-0.3) adds broad,
+    soft colour variation."""
     scale = p.get("scale", 0.05)
     streak = g.noise(g.coords(scale, _stretch(p.get("flow", "y"), 7.0)), scale=6.0, detail=8, roughness=0.62)
+    if "legs" in p:
+        leg_streak = g.noise(g.coords(scale, _stretch(p.get("leg_flow", "z"), 7.0)), scale=6.0, detail=8, roughness=0.62)
+        weight = g.smooth(g.axis("z"), *p["legs"])
+        streak = g.add(leg_streak, g.mul(g.math("SUBTRACT", streak, leg_streak), weight))
     clumps = g.voronoi(g.coords(scale * 2.5), scale=1.0, feature="SMOOTH_F1").outputs["Distance"]
     base = p["color"]
     if "belly" in p:
         low, high = p["belly"]
         base = g.mix(g.smooth(g.axis("z"), low, high), p.get("color2", p["color"]), p["color"])
+    if "dorsal" in p:
+        base = g.mix(g.smooth(g.axis("z"), *p["dorsal"]), base, p.get("color3", [c * 0.7 for c in p["color"]]))
+    if p.get("mottle"):
+        broad = g.noise(g.coords(scale * 14), detail=2, roughness=0.4)
+        base = g.mix(g.mul(g.smooth(broad, 0.35, 0.75), p["mottle"] * 2), base, g.shade(base, 0.78))
     tone = g.add(g.mul(streak, 0.75), g.lin(clumps, -0.35, 0.3))
     return dict(base=base, tone=tone, height=g.add(g.mul(streak, 0.7), g.lin(clumps, -0.3, 0.3)),
                 rough=g.lin(streak, 0.16, p.get("roughness", 0.82) - 0.08), metal=0.0,
@@ -468,16 +484,14 @@ def _recipe_stone(g, p):
                 rough=g.lin(mottle, 0.1, p.get("roughness", 0.85) - 0.05), metal=0.0, occl=g.lin(crack, -0.6, 1.0))
 
 
-RECIPE_GRAPHS = {name: globals()[f"_recipe_{name}"] for name in ATLAS_RECIPES}
+RECIPE_GRAPHS = {name: globals()[f"_recipe_{name}"] for name in ATLAS_RECIPES if name != "blend"}
 
 
-def _build_bake_material(mat, image):
-    """Replace mat's nodes with its recipe plus switchable outputs for each bake pass."""
-    p = _params(mat)
-    tree = mat.node_tree
-    tree.nodes.clear()
-    g = Graph(tree)
-    out = RECIPE_GRAPHS[mat["lab_recipe"]](g, p)
+def _channels(g, recipe, p):
+    """Final colour, roughness, metallic, occlusion and height (in metres) for a recipe."""
+    if recipe == "blend":
+        return _blend(g, p)
+    out = RECIPE_GRAPHS[recipe](g, p)
     contrast = p.get("contrast", 0.35)
     base = out["base"] if isinstance(out["base"], bpy.types.NodeSocket) else tuple(out["base"])
     tone = g.math("MAXIMUM", g.math("MINIMUM", out["tone"], 1.0), 0.0)
@@ -487,10 +501,38 @@ def _build_bake_material(mat, image):
         rough = g.new("ShaderNodeSeparateColor")
         g.put(rough.inputs[0], out["rough"])
         rough = rough.outputs[0]
+    height = g.mul(out["height"], p.get("bump", 0.5) * p.get("scale", 0.02) * 0.15)
+    return dict(color=color, rough=rough, metal=out["metal"], occl=out["occl"] if out["occl"] is not None else 1.0, height=height)
+
+
+def _blend(g, p):
+    (recipe_a, params_a), (recipe_b, params_b) = p["a"], p["b"]
+    a, b = _channels(g, recipe_a, params_a), _channels(g, recipe_b, params_b)
+    position = g.axis(p.get("axis", "y"))
+    if p.get("noise"):
+        ragged = g.noise(g.coords(p.get("noise_scale", 0.12)), detail=4, roughness=0.6)
+        position = g.add(position, g.lin(ragged, 2 * p["noise"], -p["noise"]))
+    mask = g.smooth(position, p["start"], p["end"])
+
+    def lerp(x, y):
+        return g.add(x, g.mul(g.math("SUBTRACT", y, x), mask))
+
+    return dict(color=g.mix(mask, a["color"], b["color"]), rough=lerp(a["rough"], b["rough"]),
+                metal=lerp(a["metal"], b["metal"]), occl=lerp(a["occl"], b["occl"]), height=lerp(a["height"], b["height"]))
+
+
+def _build_bake_material(mat, image):
+    """Replace mat's nodes with its recipe plus switchable outputs for each bake pass."""
+    p = _params(mat)
+    tree = mat.node_tree
+    tree.nodes.clear()
+    g = Graph(tree)
+    out = _channels(g, mat["lab_recipe"], p)
+    color, rough = out["color"], out["rough"]
     bump = g.new("ShaderNodeBump")
     g.put(bump.inputs["Height"], out["height"])
-    bump.inputs["Strength"].default_value = p.get("bump", 0.5)
-    bump.inputs["Distance"].default_value = p.get("scale", 0.02) * 0.15
+    bump.inputs["Strength"].default_value = 1.0
+    bump.inputs["Distance"].default_value = 1.0
     bsdf = g.new("ShaderNodeBsdfPrincipled")
     g.put(bsdf.inputs["Normal"], bump.outputs["Normal"])
     emit = g.new("ShaderNodeEmission")
@@ -498,7 +540,7 @@ def _build_bake_material(mat, image):
     target = g.new("ShaderNodeTexImage")
     target.image = image
     tree.nodes.active = target
-    channels = {"color": color, "rough": rough, "metal": out["metal"], "occl": out["occl"] if out["occl"] is not None else 1.0}
+    channels = {"color": color, "rough": rough, "metal": out["metal"], "occl": out["occl"]}
 
     def show(channel):
         for link in list(output.inputs["Surface"].links):
@@ -561,6 +603,12 @@ def _unwrap(objects, size, weights=None):
     bpy.ops.object.mode_set(mode="OBJECT")
 
 
+def _downsample(array, factor):
+    """Box-filter an (H, W, C) array down by an integer factor."""
+    h, w, c = array.shape
+    return array.reshape(h // factor, factor, w // factor, factor, c).mean(axis=(1, 3))
+
+
 def _float_image(name, size):
     image = bpy.data.images.new(name, size, size, alpha=False, float_buffer=True)
     image.colorspace_settings.name = "Non-Color"
@@ -602,8 +650,14 @@ def _bake_atlas(objects, settings, workdir, report):
     color = _write(f"{name} atlas color", _to_srgb(px["color"][..., :3]), workdir / "atlas_color.jpg", "JPEG", "sRGB", settings)
     ao = np.clip(px["ao"][..., 0] * 0.8 + 0.2, 0, 1) * np.clip(px["occl"][..., 0], 0, 1)
     orm = np.stack([ao, np.clip(px["rough"][..., 0], 0.04, 1), np.clip(px["metal"][..., 0], 0, 1)], axis=-1)
+    data_size = settings["atlas_data_size"] or size
+    normal = px["normal"][..., :3]
+    if data_size < size:
+        orm, normal = _downsample(orm, size // data_size), _downsample(normal, size // data_size)
+        normal = normal * 2 - 1
+        normal = normal / np.maximum(np.linalg.norm(normal, axis=-1, keepdims=True), 1e-6) * 0.5 + 0.5
     orm = _write(f"{name} atlas ORM", orm, workdir / "atlas_orm.png", "PNG", "Non-Color", settings)
-    normal = _write(f"{name} atlas normal", np.clip(px["normal"][..., :3], 0, 1), workdir / "atlas_normal.png", "PNG", "Non-Color", settings)
+    normal = _write(f"{name} atlas normal", np.clip(normal, 0, 1), workdir / "atlas_normal.png", "PNG", "Non-Color", settings)
     for image in buffers.values():
         bpy.data.images.remove(image)
     for image, role in ((color, "atlas base colour"), (orm, "atlas ORM"), (normal, "atlas normal")):
@@ -662,9 +716,11 @@ def _normal_from_height(height, strength):
 
 
 def feather_card(size, rows=4, seed=11):
-    """Neutral feather atlas: `rows` variants stacked in v (plain, barred, pale-tipped with a shaft
-    streak, mottled). u runs base to tip; each row's centre line is the rachis. Returns linear
-    colour, roughness, metallic, occlusion and an encoded normal map, all shaped (H, W, ...)."""
+    """Neutral feather atlas: `rows` variants stacked in v - plain with a soft darker margin,
+    irregularly barred, pale-fringed with a dark shaft streak, and finely vermiculated. u runs
+    base to tip and each row's centre line is the rachis. Barbs sweep towards the tip with slight
+    waviness and the odd split; the base is downy. Returns linear colour, roughness, metallic,
+    occlusion and an encoded normal map, all shaped (H, W, ...)."""
     tile = size // rows
     t = np.broadcast_to((np.arange(size) + 0.5) / size, (tile, size))
     t = np.clip((t - 0.01) / 0.98, 0, 1)
@@ -676,33 +732,38 @@ def feather_card(size, rows=4, seed=11):
     parts = {k: [] for k in ("color", "rough", "occl", "height")}
     for variant in range(rows):
         s = seed + variant * 17
-        shaft = 0.035 * (1 - 0.75 * t) + 0.006
-        rachis = _smoothstep(shaft, shaft * 0.45, d)
-        phase = t * 56 - d * 7
+        wobble = _fbm(tile, size, 4, 24, s + 1, 3) - 0.5
+        shaft = 0.03 * (1 - 0.7 * t) + 0.007
+        rachis = _smoothstep(shaft, shaft * 0.4, d)
+        phase = t * 50 - d * 6.5 + wobble * 1.2
         index = np.floor(phase) + side * 1000 + variant * 7
         frac = phase - np.floor(phase)
-        barb = (0.5 + 0.5 * np.cos(2 * np.pi * phase)) ** 1.6
-        barb_tone = 0.9 + 0.1 * _hash(index)
-        split = (_hash(index * 1.37) > 0.9) * _smoothstep(0.25, 0.55, d) * _smoothstep(0.22, 0.0, frac)
-        down = _smoothstep(0.16, 0.03, t)
+        barb = (0.5 + 0.5 * np.cos(2 * np.pi * phase)) ** 1.4
+        barb_tone = 0.93 + 0.07 * _hash(index)
+        split = (_hash(index * 1.37) > 0.955) * _smoothstep(0.35, 0.65, d) * _smoothstep(0.2, 0.0, frac)
+        down = _smoothstep(0.14, 0.02, t)
         fluff = _fbm(tile, size, 8, 64, s, 3)
-        broad = _fbm(tile, size, 2, 6, s + 3, 3)
-        tone = 0.9 + 0.14 * (broad - 0.5) - 0.05 * t
+        broad = _fbm(tile, size, 2, 5, s + 3, 3) - 0.5
+        # Natural transitions: a paler base, a slightly deeper distal half and a soft dark margin.
+        tone = 0.9 + 0.1 * broad + 0.06 * (1 - _smoothstep(0.1, 0.5, t)) - 0.05 * _smoothstep(0.5, 1.0, t)
+        tone = tone * (1 - 0.1 * _smoothstep(0.7, 1.0, d))
         if variant == 1:
-            bands = 0.5 + 0.5 * np.sin(2 * np.pi * (t * 5.5 + d * 0.5 + 0.15))
-            tone = tone * (1 - 0.38 * _smoothstep(0.55, 0.85, bands))
+            spacing = 5.2 + 0.8 * broad
+            bands = 0.5 + 0.5 * np.sin(2 * np.pi * (t * spacing + d * 0.35 + wobble * 0.5))
+            tone = tone * (1 - 0.24 * _smoothstep(0.55, 0.9, bands) * _smoothstep(0.12, 0.3, t))
         elif variant == 2:
-            tone = tone + 0.18 * _smoothstep(0.84, 0.95, t) - 0.2 * _smoothstep(0.28, 0.06, d) * (1 - down)
+            fringe = _smoothstep(0.86, 0.97, t) + 0.6 * _smoothstep(0.82, 0.98, d) * _smoothstep(0.3, 0.6, t)
+            streak = _smoothstep(0.22, 0.04, d + 0.04 * wobble) * _smoothstep(0.15, 0.35, t)
+            tone = tone + 0.1 * np.clip(fringe, 0, 1) - 0.28 * streak
         elif variant == 3:
-            spots = _fbm(tile, size, 3, 14, s + 9, 3)
-            tone = tone * (1 - 0.32 * _smoothstep(0.56, 0.72, spots))
-        tone = tone * barb_tone * (0.84 + 0.16 * barb) * (1 - 0.45 * split)
-        tone = tone * (1 - 0.12 * _smoothstep(0.85, 1.0, d))
-        tone = np.where(rachis > 0, tone * (1 - rachis) + 0.97 * rachis, tone)
+            vermiculation = _fbm(tile, size, 6, 30, s + 9, 4)
+            tone = tone * (1 - 0.16 * _smoothstep(0.52, 0.66, vermiculation))
+        tone = tone * barb_tone * (0.88 + 0.12 * barb) * (1 - 0.3 * split)
+        tone = tone * (1 - rachis) + (0.95 - 0.12 * t) * rachis
         tone = tone * (1 - down) + (0.86 + 0.1 * fluff) * down
-        height = (barb * 0.5 * (1 - rachis) + rachis - split * 0.6) * (1 - down) + fluff * 0.25 * down
-        rough = 0.6 + 0.1 * (1 - barb) - 0.24 * rachis + 0.2 * split + 0.22 * down
-        occl = 1 - 0.22 * (1 - barb) * (1 - rachis) - 0.35 * split - 0.12 * down
+        height = (barb * 0.45 * (1 - rachis) + rachis * 0.9 - split * 0.5) * (1 - down) + fluff * 0.25 * down
+        rough = 0.62 + 0.08 * (1 - barb) - 0.22 * rachis + 0.15 * split + 0.2 * down
+        occl = 1 - 0.16 * (1 - barb) * (1 - rachis) - 0.25 * split - 0.1 * down
         parts["color"].append(tone)
         parts["rough"].append(rough)
         parts["occl"].append(occl)
@@ -713,23 +774,34 @@ def feather_card(size, rows=4, seed=11):
     height = np.concatenate(parts["height"], axis=0)
     return dict(color=color, rough=np.clip(np.concatenate(parts["rough"]), 0.05, 1),
                 metal=np.zeros_like(tone), occl=np.clip(np.concatenate(parts["occl"]), 0, 1),
-                normal=_normal_from_height(height, 1.6))
+                normal=_normal_from_height(height, 1.3))
 
 
 def eye_card(size, iris, outer, pupil=0.1, iris_radius=0.3, seed=5):
-    """Iris texture for an ellipsoid whose +Z pole is the gaze: v=1 is the pupil centre, u wraps
-    around it. Radial fibres, a lighter collarette and a dark limbal ring."""
+    """Iris texture for an ellipsoid whose +Z pole is the gaze: v=1 is the pupil centre and u wraps
+    around it. A gold-to-bronze gradient, fine radial fibres, a wavy collarette, darker crypts,
+    sparse flecks, a soft limbal ring and a slightly irregular pupil."""
     v = (np.arange(size) + 0.5) / size
     r = np.broadcast_to((1 - v)[:, None], (size, size))
-    fibres = _fbm(size, size, 6, 48, seed, 3, wrap_x=True)
-    crypts = _fbm(size, size, 10, 24, seed + 4, 2, wrap_x=True)
+    angle = np.broadcast_to(((np.arange(size) + 0.5) / size * 2 * np.pi)[None, :], (size, size))
+    fibres = _fbm(size, size, 8, 128, seed, 3, wrap_x=True)
+    coarse = _fbm(size, size, 6, 32, seed + 2, 3, wrap_x=True)
+    crypts = _fbm(size, size, 12, 40, seed + 4, 2, wrap_x=True)
+    flecks = _fbm(size, size, 40, 160, seed + 6, 1, wrap_x=True)
     iris, outer = np.array(iris), np.array(outer)
-    radial = (r - pupil) / (iris_radius - pupil)
-    light = 0.75 + 0.5 * fibres - 0.25 * _smoothstep(0.55, 0.75, crypts) + 0.25 * _smoothstep(0.35, 0.15, np.abs(radial - 0.3))
-    color = iris[None, None, :] * light[..., None]
-    color = color * (1 - 0.65 * _smoothstep(0.75, 1.0, radial))[..., None]
-    color = np.where((r > iris_radius)[..., None], outer[None, None, :] * (0.8 + 0.3 * fibres[..., None]), color)
-    color = color * (1 - _smoothstep(pupil + 0.012, pupil - 0.012, r))[..., None] + 0.004 * _smoothstep(pupil + 0.012, pupil - 0.012, r)[..., None]
+    edge = pupil + 0.006 * np.sin(angle * 5 + 1.3) + 0.004 * (coarse - 0.5)
+    radial = np.clip((r - edge) / (iris_radius - edge), 0, 1)
+    inner_color, outer_color = np.clip(iris * 1.3 + 0.05, 0, 1), iris * 0.55
+    color = inner_color[None, None, :] + (outer_color - inner_color)[None, None, :] * _smoothstep(0.1, 0.95, radial)[..., None]
+    light = 0.8 + 0.35 * fibres + 0.12 * (coarse - 0.5)
+    collarette = 0.33 + 0.04 * np.sin(angle * 11 + 3 * coarse)
+    light = light + 0.22 * _smoothstep(0.07, 0.0, np.abs(radial - collarette))
+    light = light - 0.22 * _smoothstep(0.58, 0.72, crypts) * _smoothstep(0.38, 0.5, radial)
+    light = light - 0.35 * _smoothstep(0.8, 0.86, flecks)
+    color = color * light[..., None] * (1 - 0.7 * _smoothstep(0.78, 1.0, radial))[..., None]
+    color = np.where((r > iris_radius)[..., None], outer[None, None, :] * (0.75 + 0.35 * coarse[..., None]), color)
+    hole = _smoothstep(edge + 0.008, edge - 0.008, r)[..., None]
+    color = color * (1 - hole) + 0.003 * hole
     return dict(color=np.clip(color, 0, 1))
 
 
@@ -781,13 +853,51 @@ def _bake_vertex_tint(objects, settings):
     world.distance = settings["ao_distance"]
     strength = settings["card_ao_strength"]
     for obj in objects:
-        tint = np.array(_params(obj.material_slots[0].material)["color"] + [1.0], np.float32)
+        params = _params(obj.material_slots[0].material)
         layer = obj.data.color_attributes["Color"]
-        values = np.empty(len(layer.data) * 4, np.float32)
+        count = len(layer.data)
+        values = np.empty(count * 4, np.float32)
         layer.data.foreach_get("color", values)
-        values = values.reshape(-1, 4)
-        shade = 1 - strength + strength * values[:, :1]
-        layer.data.foreach_set("color", (np.concatenate([shade, shade, shade, np.ones_like(shade)], 1) * tint).ravel())
+        shade = 1 - strength + strength * values.reshape(-1, 4)[:, :1]
+        tint = np.tile(np.array(params["color"] + [1.0], np.float32), (count, 1))
+        authored = obj.data.color_attributes.get("Tint")
+        if authored is not None:
+            authored.data.foreach_get("color", tint.ravel())
+            obj.data.color_attributes.remove(authored)
+            layer = obj.data.color_attributes["Color"]
+        jitter = params.get("jitter", 0.0)
+        if jitter:
+            # One random value and warmth shift per piece, so neighbouring feathers differ subtly.
+            piece = _pieces(obj.data)
+            rng = np.random.default_rng(len(piece) + count)
+            value = 1 + rng.uniform(-jitter, jitter, piece.max() + 1)[piece]
+            warm = rng.uniform(-jitter, jitter, piece.max() + 1)[piece] * 0.5
+            tint[:, 0] *= value * (1 + warm)
+            tint[:, 1] *= value
+            tint[:, 2] *= value * (1 - warm)
+        tint[:, :3] *= shade
+        tint[:, 3] = 1.0
+        layer.data.foreach_set("color", np.clip(tint, 0, None).ravel())
+
+
+def _pieces(mesh):
+    """Connected-component index per vertex (each feather card is its own component)."""
+    parent = np.arange(len(mesh.vertices))
+
+    def find(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    edges = np.empty(len(mesh.edges) * 2, np.int64)
+    mesh.edges.foreach_get("vertices", edges)
+    for a, b in edges.reshape(-1, 2):
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[ra] = rb
+    roots = np.array([find(i) for i in range(len(parent))])
+    return np.unique(roots, return_inverse=True)[1]
 
 
 # ---------------------------------------------------------------- images and final materials
@@ -875,21 +985,25 @@ def _pbr_material(name, color, orm, normal, vertex_color=False, roughness=1.0, e
 # ---------------------------------------------------------------- draw-call reduction
 
 def _merge_rigid(objects):
-    """Join unanimated meshes that share a parent, parent bone and materials into one object."""
+    """Join unanimated meshes that share a parent, parent bone, materials and (for skinned meshes)
+    armature into one object."""
     groups = defaultdict(list)
     for obj in objects:
-        if obj.animation_data or obj.modifiers or obj.data.shape_keys or obj.children or obj.data.users > 1:
+        armatures = [m.object for m in obj.modifiers if m.type == "ARMATURE"]
+        if obj.animation_data or len(obj.modifiers) != len(armatures) or len(armatures) > 1 \
+                or obj.data.shape_keys or obj.children or obj.data.users > 1:
             continue
         key = (obj.parent.name if obj.parent else "", obj.parent_type, obj.parent_bone,
-               tuple(s.material.name if s.material else "" for s in obj.material_slots))
+               tuple(s.material.name if s.material else "" for s in obj.material_slots),
+               armatures[0].name if armatures else "")
         groups[key].append(obj)
-    for (parent, _, bone, materials), members in groups.items():
+    for (parent, _, bone, materials, armature), members in groups.items():
         if len(members) < 2:
             continue
         prefix = members[0].name.split(" | ")[0]
         with bpy.context.temp_override(active_object=members[0], object=members[0], selected_objects=members,
                                        selected_editable_objects=members):
             bpy.ops.object.join()
-        members[0].name = f"{prefix} | {bone or parent or 'root'} | {materials[0]}"
+        members[0].name = f"{prefix} | {'skinned' if armature else bone or parent or 'root'} | {materials[0]}"
         members[0].data.name = members[0].name
     return [o for o in bpy.context.scene.objects if o.type == "MESH"]

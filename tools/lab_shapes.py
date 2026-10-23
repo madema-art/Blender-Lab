@@ -13,12 +13,19 @@ layer. UV conventions:
 
 Objects whose material is an atlas recipe are re-unwrapped by `lab_materials.finalize`, so their
 authored UVs only matter for card and eye recipes.
+
+For skinned creatures, `Batch.add` takes per-piece bone weights (see `envelope_weights`) and an
+optional linear-RGB tint, stored as the "Tint" colour attribute that card materials use in place
+of their material colour. `displace` sculpts organic forms with soft stamps, `scatter` places
+pieces irregularly over a surface, and `eyelid` builds closed lid shells.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+import bisect
 import math
+import random
 
 import bpy
 from mathutils import Matrix, Vector
@@ -56,18 +63,23 @@ def make_object(name, mat, piece, smooth=True, collection=None):
 
 
 class Batch:
-    """Collects many small pieces (feathers, scales, claws) into one mesh."""
+    """Collects many small pieces (feathers, scales, claws) into one mesh, optionally with a tint
+    and bone weights per piece."""
 
     def __init__(self, name, mat):
         self.name, self.mat = name, mat
         self.verts, self.faces, self.uvs = [], [], []
+        self.tints, self.weights = [], []
         self.count = 0
 
-    def add(self, piece):
+    def add(self, piece, tint=None, weights=None):
+        """`weights` is {bone: weight} for the whole piece, or a list with one dict per vertex."""
         base = len(self.verts)
         self.verts.extend(piece.verts)
         self.faces.extend(tuple(i + base for i in face) for face in piece.faces)
         self.uvs.extend(piece.uvs or [tuple((0.0, 0.0) for _ in face) for face in piece.faces])
+        self.tints.extend([tint] * len(piece.verts))
+        self.weights.extend(weights if isinstance(weights, list) else [weights] * len(piece.verts))
         self.count += 1
 
     def variant(self, choices=4):
@@ -75,17 +87,31 @@ class Batch:
         return (self.count * 2654435761 >> 7) % choices
 
     def build(self):
-        if self.faces:
-            return make_object(self.name, self.mat, Piece(self.verts, self.faces, self.uvs))
+        if not self.faces:
+            return None
+        obj = make_object(self.name, self.mat, Piece(self.verts, self.faces, self.uvs))
+        if any(t is not None for t in self.tints):
+            fallback = tuple(self.mat.diffuse_color[:3])
+            layer = obj.data.color_attributes.new("Tint", "FLOAT_COLOR", "POINT")
+            for item, tint in zip(layer.data, self.tints):
+                item.color = (*(tint if tint is not None else fallback), 1.0)
+        if any(w for w in self.weights):
+            assign_weights(obj, self.weights)
+        return obj
 
 
 def _ring_uv(k, ring):
     return k / ring
 
 
-def loft(points, ring=12):
+def circle(angle):
+    return math.cos(angle), math.sin(angle)
+
+
+def loft(points, ring=12, profile=circle):
     """Tube through (position, radius_side, radius_up) points, using parallel-transported frames.
-    A zero radius at either end closes it into a point."""
+    A zero radius at either end closes it into a point. `profile(angle)` returns the unit
+    cross-section point (side, up); the default is a circle."""
     centres = [Vector(p[0]) for p in points]
     tangents = []
     for i in range(len(centres)):
@@ -109,8 +135,8 @@ def loft(points, ring=12):
             continue
         start = len(verts)
         for k in range(ring):
-            angle = 2 * math.pi * k / ring
-            verts.append(centre + side * (math.cos(angle) * rs) + normal * (math.sin(angle) * ru))
+            cs, sn = profile(2 * math.pi * k / ring)
+            verts.append(centre + side * (cs * rs) + normal * (sn * ru))
         rings.append(list(range(start, start + ring)))
     faces, uvs = [], []
     for i, (a, b) in enumerate(zip(rings, rings[1:])):
@@ -171,12 +197,18 @@ def ellipsoid(centre, radii, rotation=Matrix.Identity(3), segments=20, rings=12)
 FLIGHT = (0.22, 0.8, 1.0, 1.0, 1.0, 0.97, 0.88, 0.66, 0.0)
 PRIMARY = (0.2, 0.75, 0.95, 1.0, 0.95, 0.88, 0.75, 0.5, 0.0)
 CONTOUR = (0.3, 0.85, 1.0, 1.0, 0.9, 0.7, 0.4, 0.0)
+SECONDARY = (0.22, 0.82, 1.0, 1.0, 1.0, 1.0, 0.98, 0.9, 0.62, 0.0)        # broad, blunt tip
+EMARGINATED = (0.2, 0.78, 1.0, 1.0, 0.92, 0.62, 0.5, 0.44, 0.34, 0.0)     # notched "finger" primary
+SMALL = (0.35, 0.95, 0.8, 0.0)                                             # small contour, few rows
+HACKLE = (0.3, 0.75, 0.8, 0.65, 0.42, 0.2, 0.0)                            # lanceolate nape feather
+WISP = (0.25, 0.55, 0.5, 0.35, 0.0)                                        # narrow tapering tuft
 FEATHER_VARIANTS = 4  # rows in the feather card atlas; see lab_materials feather recipe
 
 
-def feather(matrix, length, width, profile=FLIGHT, curl=0.0, ridge=0.012, variant=0):
+def feather(matrix, length, width, profile=FLIGHT, curl=0.0, ridge=0.012, variant=0, sweep=0.0, twist=0.0):
     """A cambered feather card with a raised rachis, lying along local +X with its top facing +Z.
-    Its UVs fill one variant row of the shared feather atlas."""
+    `curl` bends the shaft up (+) or down (-), `sweep` bends it sideways, `twist` rotates the vane
+    about the shaft towards the tip. Its UVs fill one variant row of the shared feather atlas."""
     verts, uv_of = [], []
     rows = len(profile)
     v_base, v_span = (variant % FEATHER_VARIANTS) / FEATHER_VARIANTS, 1 / FEATHER_VARIANTS
@@ -189,15 +221,17 @@ def feather(matrix, length, width, profile=FLIGHT, curl=0.0, ridge=0.012, varian
         t = i / (rows - 1)
         x = t * length
         z = curl * t * t * length
+        y = sweep * t * t * length
         half = w * width * 0.5
         if i == rows - 1:
-            verts.append(matrix @ Vector((x, 0, z)))
+            verts.append(matrix @ Vector((x, y, z)))
             uv_of.append(uv(t, 0.5))
             continue
         droop = -0.25 * half
-        verts += [matrix @ Vector((x, -half, z + droop)),
-                  matrix @ Vector((x, 0, z + ridge * (1 - t))),
-                  matrix @ Vector((x, half, z + droop))]
+        ca, sa = math.cos(twist * t), math.sin(twist * t)
+        verts += [matrix @ Vector((x, y - half * ca, z + droop - half * sa)),
+                  matrix @ Vector((x, y, z + ridge * (1 - t))),
+                  matrix @ Vector((x, y + half * ca, z + droop + half * sa))]
         # The vane texture is drawn at full width; narrow rows show its central part.
         uv_of += [uv(t, 0.5 - 0.5 * w), uv(t, 0.5), uv(t, 0.5 + 0.5 * w)]
     faces = []
@@ -250,3 +284,161 @@ def bvh_of(*objects):
         verts += [obj.matrix_world @ v.co for v in obj.data.vertices]
         faces += [[i + base for i in p.vertices] for p in obj.data.polygons]
     return BVHTree.FromPolygons(verts, faces)
+
+
+# ---------------------------------------------------------------- skinning
+
+def envelope_weights(point, bones, power=4.0, influences=3):
+    """Weights for `point` from bone segments [(name, head, tail)], falling off with distance."""
+    point = Vector(point)
+    scored = []
+    for name, head, tail in bones:
+        head, tail = Vector(head), Vector(tail)
+        axis = tail - head
+        t = max(0.0, min(1.0, (point - head).dot(axis) / max(axis.length_squared, 1e-9)))
+        distance = (point - (head + axis * t)).length
+        scored.append((1.0 / (distance + 0.03) ** power, name))
+    scored.sort(reverse=True)
+    top = scored[:influences]
+    total = sum(w for w, _ in top)
+    return {name: w / total for w, name in top if w / total > 0.02}
+
+
+def assign_weights(obj, weights):
+    """Create vertex groups from one {bone: weight} dict (or None) per vertex."""
+    groups = {}
+    for index, entry in enumerate(weights):
+        for bone, weight in (entry or {}).items():
+            if bone not in groups:
+                groups[bone] = obj.vertex_groups.get(bone) or obj.vertex_groups.new(name=bone)
+            groups[bone].add([index], weight, "REPLACE")
+
+
+def skin_to(obj, armature):
+    """Parent obj to an armature and deform it with its vertex groups."""
+    obj.parent = armature
+    obj.matrix_parent_inverse = armature.matrix_world.inverted()
+    modifier = obj.modifiers.new("Armature", "ARMATURE")
+    modifier.object = armature
+    return obj
+
+
+# ---------------------------------------------------------------- sculpting and scattering
+
+def _segment_distance(point, start, end):
+    axis = end - start
+    t = max(0.0, min(1.0, (point - start).dot(axis) / max(axis.length_squared, 1e-12)))
+    return (point - (start + axis * t)).length
+
+
+def displace(obj, stamps, snap=False):
+    """Sculpt a mesh with soft strokes along vertex normals, falling off as exp(-(d / radius)^2):
+    (centre, radius, amount) is a round stamp; (start, end, radius, amount) is a ridge or groove
+    along a segment. Negative amounts carve hollows. With snap=True, stroke points are first moved
+    to the nearest point of the surface, so they can be placed approximately."""
+    mesh = obj.data
+    mesh.update()
+    normals = [Vector(n.vector) for n in mesh.vertex_normals]
+    tree = BVHTree.FromPolygons([v.co for v in mesh.vertices], [p.vertices for p in mesh.polygons]) if snap else None
+
+    def place(point):
+        point = Vector(point)
+        return tree.find_nearest(point)[0] if tree else point
+
+    strokes = []
+    for stamp in stamps:
+        if len(stamp) == 3:
+            centre = place(stamp[0])
+            strokes.append((centre, centre, stamp[1], stamp[2]))
+        else:
+            strokes.append((place(stamp[0]), place(stamp[1]), stamp[2], stamp[3]))
+    for vertex, normal in zip(mesh.vertices, normals):
+        offset = 0.0
+        for start, end, radius, amount in strokes:
+            d2 = (_segment_distance(vertex.co, start, end) / radius) ** 2
+            if d2 < 9.0:
+                offset += amount * math.exp(-d2)
+        if offset:
+            vertex.co += normal * offset
+    mesh.update()
+
+
+def reshape(obj, function):
+    """Move every vertex through function(co) -> new co, for broad proportional shaping."""
+    for vertex in obj.data.vertices:
+        vertex.co = function(vertex.co.copy())
+    obj.data.update()
+
+
+def scatter(objects, spacing, seed=1, candidates=20000, accept=None):
+    """Irregular, non-overlapping points over the surfaces of `objects`. `spacing(location)` gives
+    the minimum distance to neighbours there, or None to leave that spot bare; `accept(location)`
+    may veto a candidate. Returns [(location, normal)] in the order they were accepted."""
+    rng = random.Random(seed)
+    triangles, cumulative, running = [], [], 0.0
+    for obj in objects:
+        mesh = obj.data
+        mesh.calc_loop_triangles()
+        world = obj.matrix_world
+        for tri in mesh.loop_triangles:
+            a, b, c = (world @ mesh.vertices[i].co for i in tri.vertices)
+            area = (b - a).cross(c - a).length / 2
+            if area > 0:
+                running += area
+                triangles.append((a, b, c))
+                cumulative.append(running)
+    cell = 0.1
+    grid, points = {}, []
+    for _ in range(candidates):
+        a, b, c = triangles[min(bisect.bisect(cumulative, rng.random() * running), len(triangles) - 1)]
+        u, v = rng.random(), rng.random()
+        if u + v > 1:
+            u, v = 1 - u, 1 - v
+        location = a + (b - a) * u + (c - a) * v
+        gap = spacing(location)
+        if gap is None or (accept and not accept(location)):
+            continue
+        key = tuple(int(math.floor(x / cell)) for x in location)
+        reach = int(math.ceil(gap / cell))
+        crowded = any((other - location).length < gap
+                      for dx in range(-reach, reach + 1) for dy in range(-reach, reach + 1) for dz in range(-reach, reach + 1)
+                      for other in grid.get((key[0] + dx, key[1] + dy, key[2] + dz), ()))
+        if crowded:
+            continue
+        grid.setdefault(key, []).append(location)
+        points.append((location, (b - a).cross(c - a).normalized()))
+    return points
+
+
+# ---------------------------------------------------------------- eyelids
+
+def eyelid(centre, radius, axis, angle, thickness=0.006, segments=20, rings=6):
+    """A closed spherical lid shell around an eye: the cap about `axis` out to `angle` radians,
+    `thickness` deep, with a rounded rim at its edge."""
+    centre, axis = Vector(centre), Vector(axis).normalized()
+    side = axis.orthogonal().normalized()
+    other = axis.cross(side)
+    outer_r, inner_r = radius + thickness, radius + 0.0015
+
+    def point(polar, azimuth, r):
+        direction = axis * math.cos(polar) + (side * math.cos(azimuth) + other * math.sin(azimuth)) * math.sin(polar)
+        return centre + direction * r
+
+    verts = [centre + axis * outer_r]
+    for i in range(1, rings + 1):
+        polar = angle * i / rings
+        verts += [point(polar, 2 * math.pi * k / segments, outer_r) for k in range(segments)]
+    rim = angle + thickness / radius * 0.6
+    verts += [point(rim, 2 * math.pi * k / segments, (outer_r + inner_r) / 2) for k in range(segments)]
+    for i in range(rings, 0, -1):
+        polar = angle * i / rings
+        verts += [point(polar, 2 * math.pi * k / segments, inner_r) for k in range(segments)]
+    verts.append(centre + axis * inner_r)
+    faces = [(0, 1 + k, 1 + (k + 1) % segments) for k in range(segments)]
+    bands = 2 * rings + 1
+    for band in range(bands - 1):
+        a, b = 1 + band * segments, 1 + (band + 1) * segments
+        faces += [(a + k, b + k, b + (k + 1) % segments, a + (k + 1) % segments) for k in range(segments)]
+    last, top = 1 + (bands - 1) * segments, len(verts) - 1
+    faces += [(last + k, top, last + (k + 1) % segments) for k in range(segments)]
+    return Piece(verts, faces, None)

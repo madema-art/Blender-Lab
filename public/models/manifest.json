@@ -2,7 +2,7 @@
   {
     "name": "Active Creation",
     "file": "active-creation.glb",
-    "updated": "2026-10-23T21:43:08+00:00"
+    "updated": "2026-10-23T23:14:11+00:00"
   },
   {
     "name": "Alien Flying Saucer",
@@ -270,5 +270,17 @@
     "file": "griffon-flat-materials.glb",
     "updated": "2026-10-23T20:51:53+00:00",
     "creationSource": "creations/griffon-flat-materials/scene.py"
+  },
+  {
+    "name": "Griffon V1 (textured)",
+    "file": "griffon-v1-textured.glb",
+    "updated": "2026-10-23T21:43:08+00:00",
+    "creationSource": "creations/griffon-v1-textured/scene.py"
+  },
+  {
+    "name": "Griffon V2",
+    "file": "griffon-v2.glb",
+    "updated": "2026-10-23T23:14:11+00:00",
+    "creationSource": "creations/griffon-v2/scene.py"
   }
 ]

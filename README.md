@@ -39,7 +39,7 @@ The **Studio moth** remains on the shelf as a Three.js animation example. It is 
 
 Creations are built as game-ready assets: UV-mapped, textured with physically based (PBR) materials, and exported as portable glTF 2.0 that any standard engine reads. The pipeline lives in two Blender Python modules that every creation source can import.
 
-**`tools/lab_shapes.py`** builds meshes that carry UVs: `loft` (tubes), `ellipsoid`, `feather` (feather cards), `skin_body` (organic trunks from a skin-modifier skeleton), plus `Batch` to merge many small pieces into one mesh.
+**`tools/lab_shapes.py`** builds meshes that carry UVs: `loft` (tubes, with optional cross-section profiles such as a beak's D-section), `ellipsoid`, `feather` (feather cards with curl, sweep and twist, and profiles for flight, notched primary, secondary, contour, hackle and wisp feathers), `skin_body` (organic trunks from a skin-modifier skeleton), `eyelid` (closed lid shells), plus `Batch` to merge many small pieces into one mesh with a per-piece tint and bone weights. For sculpting and skinning it offers `displace` (soft stamps and ridge strokes, optionally snapped to the surface), `reshape` (proportional shaping), `scatter` (irregular, non-overlapping placement over a surface), `envelope_weights`, `assign_weights` and `skin_to`.
 
 **`tools/lab_materials.py`** turns material recipes into textures. A source declares materials with `lab.surface(name, recipe, color, **params)`:
 
@@ -47,7 +47,8 @@ Creations are built as game-ready assets: UV-mapped, textured with physically ba
 | --- | --- | --- |
 | `fur`, `plumage`, `skin`, `scales`, `keratin` | Animals and creatures: pelts, body feathers, bare skin, scutes, beaks, claws, talons and horns | Atlas |
 | `leather`, `metal`, `wood`, `stone`, `plain` | Props and environments | Atlas |
-| `feather` | Feather cards; one shared texture, tinted per material | Card |
+| `blend` | Crossfades two atlas recipes across the body with a ragged edge, such as plumage into fur | Atlas |
+| `feather` | Feather cards; one shared texture, tinted per material or per feather | Card |
 | `eye` | Eyes, with a generated iris, clearcoat cornea and a soft glow | Card |
 
 Common parameters: `color` and `color2` (linear RGB), `scale` (pattern size in metres), `roughness`, `metallic`, `variation`, `contrast`, `bump`, and `texel` (how much atlas area a material earns; 2 doubles its resolution). Each recipe's docstring lists its own extras, such as `belly` countershading for fur or a darker `tip` for keratin. `lab.configure(...)` sets per-creation options such as `atlas_size`, `card_size` and the texture budget.
@@ -55,8 +56,8 @@ Common parameters: `color` and `color2` (linear RGB), `scale` (pattern size in m
 When the builder runs, it bakes these materials automatically:
 
 1. **Atlas materials** are unwrapped together (Smart UV Project, packed with texel weights) and Cycles bakes base colour, roughness, metallic, a tangent-space normal map and ambient occlusion from the whole creation into **one material** with three textures: a base-colour JPEG, an ORM PNG (R occlusion, G roughness, B metallic) and a normal PNG.
-2. **Card materials** keep the UVs their geometry authored. Feathers share one feather atlas with four variants (plain, barred, pale-tipped, mottled) showing barbs, a rachis, vane splits and downy bases. Each feather's tint and its baked contact shadow go into vertex colours (`COLOR_0`), so every feather colour in a creation is one material.
-3. **Rigid meshes** that share a bone and a material are merged, which cuts draw calls.
+2. **Card materials** keep the UVs their geometry authored. Feathers share one feather atlas with four variants (plain with a soft margin, irregularly barred, pale-fringed with a shaft streak, vermiculated) showing barbs, a rachis, the odd vane split and downy bases. Each feather's tint (from its material, or per feather from a `Batch` tint), a subtle per-feather `jitter`, and its baked contact shadow go into vertex colours (`COLOR_0`), so every feather colour in a creation is one material.
+3. **Meshes** that share a parent bone or armature and a material are merged, which cuts draw calls; skinned creatures typically end with one draw call per material.
 
 Sources that never call `lab.surface()` build exactly as before, with their own flat materials.
 
@@ -64,7 +65,7 @@ Sources that never call `lab.surface()` build exactly as before, with their own 
 
 The builder prints a report after every build: draw calls, triangles, vertices, materials, and each texture's size, format and estimated GPU memory (mipmaps included). The build fails if a textured mesh has no UVs, a texture is larger than 2048 pixels, or textures need more than 64 MB of GPU memory. A creation can lower those limits with `lab.configure`. `npm test` checks the same contract on every committed creation.
 
-The Griffon is the reference: 15 draw calls (down from 38), about 41,000 vertices, three materials and seven textures using about 32 MB of GPU memory. To look at the baked images, build with `--keep-textures <folder>`.
+Griffon V2 is the reference: one skinned mesh per material (3 draw calls), about 41,000 triangles, three materials and seven textures using about 49 MB of GPU memory, with a 2048 base-colour atlas and 1024 data maps (`atlas_data_size`). Its source shows a full skinned creature: sculpted trunk and head, per-flight-feather bones so wings fold, and three clips. To look at the baked images, build with `--keep-textures <folder>`. Baking a 2048 atlas takes several minutes on a CPU.
 
 Textures are embedded as JPEG (base colour) and PNG (data maps). GPU texture compression (KTX2 with Basis Universal) would cut memory by roughly four to six times but needs the KTX-Software encoder, which this environment does not include; the contract above keeps uncompressed textures within budget instead.
 
