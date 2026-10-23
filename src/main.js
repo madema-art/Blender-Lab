@@ -6,6 +6,8 @@ import { makeDemo } from './demo.js';
 import { disposeObject } from './dispose.js';
 import { formatUpdated, matchesSearch, newestFirst, sourceLabel } from './library.js';
 import { createThumbnails } from './thumbnails.js';
+import { createLighting, LIGHTING_PRESETS } from './lighting.js';
+import { CHANNELS, collectMaterials, createChannelView, describeMaterial, formatMegabytes, isolate, textureMemory } from './inspect.js';
 import './style.css';
 
 const $ = (id) => document.getElementById(id);
@@ -21,16 +23,18 @@ catch { status('WebGL is unavailable. Turn on hardware acceleration in your brow
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.setClearColor(0x000000, 0);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
-renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFShadowMap;
 viewport.prepend(renderer.domElement);
 const orbit = new OrbitControls(camera, renderer.domElement);
 orbit.enableDamping = true;
-scene.add(new THREE.HemisphereLight(0xe7f6ff, 0x526252, 2.5));
-const key = new THREE.DirectionalLight(0xffe9cc, 3); key.position.set(3, 5, 4); scene.add(key);
-const rim = new THREE.DirectionalLight(0xb6e6ff, 2); rim.position.set(-4, 2, -3); scene.add(rim);
+const lighting = createLighting(renderer, scene, { hdrUrl: `${import.meta.env.BASE_URL}environments/lab-studio.hdr` });
+const channelView = createChannelView();
 const grid = new THREE.GridHelper(20, 40, 0x52675c, 0x344840); grid.material.transparent = true; grid.material.opacity = 0.32; scene.add(grid);
 
 let root, mixer, action, clips = [], clipIndex = 0, playing = true, loadId = 0, current = null, statusTimer;
+let materialEntries = [], isolated = null;
+const hiddenByIsolation = new Map();
 const loader = new GLTFLoader();
 const thumbnails = createThumbnails();
 const assets = [];
@@ -63,6 +67,7 @@ function frame(direction) {
   orbit.target.copy(center); camera.near = Math.max(distance / 1000, .001); camera.far = Math.max(distance * 100, 100); camera.updateProjectionMatrix();
   orbit.minDistance = radius * .1; orbit.maxDistance = distance * 10;
   grid.position.y = box.min.y - radius * .015; grid.scale.setScalar(radius / 3); orbit.update();
+  lighting.fit(box);
 }
 
 function setTransportEnabled(enabled) {
@@ -121,8 +126,84 @@ function updatePlay() {
   button.title = label;
 }
 
+// Channel views and isolation swap materials and visibility; this puts the model back to its own state.
+function showOriginal() {
+  channelView.restore();
+  isolate(root, null, hiddenByIsolation);
+}
+
+function refreshView() {
+  channelView.restore();
+  isolate(root, isolated, hiddenByIsolation);
+  channelView.apply(root, $('channel').value, { wireframe: $('wire').checked });
+}
+
+function mapThumbnail(map) {
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = 64;
+  canvas.className = 'map-thumb';
+  canvas.title = `${map.label} ${map.width}×${map.height}`;
+  try { canvas.getContext('2d').drawImage(map.texture.image, 0, 0, 64, 64); }
+  catch { canvas.classList.add('empty'); }
+  return canvas;
+}
+
+function renderMaterials() {
+  const list = $('materials');
+  if (!root) { list.replaceChildren(); $('material-summary').textContent = 'Open a creation to inspect its materials.'; return; }
+  const textures = materialEntries.flatMap(entry => describeMaterial(entry.material).maps.map(map => map.texture));
+  const memory = textureMemory(textures);
+  const unique = new Set(textures.map(texture => texture.image)).size;
+  $('material-summary').textContent = unique
+    ? `${materialEntries.length} material${materialEntries.length === 1 ? '' : 's'}, ${unique} texture${unique === 1 ? '' : 's'}, about ${formatMegabytes(memory)} of GPU memory. Pick one to show only its parts.`
+    : `${materialEntries.length} material${materialEntries.length === 1 ? '' : 's'} using flat colours, with no textures.`;
+  list.replaceChildren(...materialEntries.map(entry => {
+    const info = describeMaterial(entry.material);
+    const item = document.createElement('li');
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'material';
+    button.setAttribute('aria-pressed', String(isolated === entry.material));
+    const swatch = document.createElement('span');
+    swatch.className = 'swatch';
+    swatch.style.background = info.color || 'transparent';
+    const text = document.createElement('span');
+    text.className = 'material-text';
+    const name = document.createElement('span');
+    name.className = 'material-name';
+    name.textContent = info.name;
+    const facts = document.createElement('span');
+    facts.className = 'material-facts';
+    const values = info.roughness === undefined ? [info.type] : [info.roughnessText, info.metalnessText];
+    facts.textContent = [...values, ...info.traits, entry.hasUv ? null : 'no UVs'].filter(Boolean).join(' · ');
+    text.append(name, facts);
+    button.append(swatch, text);
+    if (info.maps.length) {
+      const maps = document.createElement('span');
+      maps.className = 'maps';
+      for (const map of info.maps) {
+        const chip = document.createElement('span');
+        chip.className = 'map';
+        const label = document.createElement('span');
+        label.textContent = `${map.label} ${map.width}`;
+        chip.append(mapThumbnail(map), label);
+        maps.append(chip);
+      }
+      button.append(maps);
+    }
+    button.onclick = () => {
+      isolated = isolated === entry.material ? null : entry.material;
+      refreshView();
+      renderMaterials();
+    };
+    item.append(button);
+    return item;
+  }));
+}
+
 function install(model, animations, asset) {
-  if (root) { mixer.stopAllAction(); mixer.uncacheRoot(root); scene.remove(root); disposeObject(root); }
+  if (root) { showOriginal(); mixer.stopAllAction(); mixer.uncacheRoot(root); scene.remove(root); disposeObject(root); }
+  channelView.reset(); isolated = null; $('channel').value = 'lit';
   root = new THREE.Group(); root.name = 'LabTransform'; root.add(model); scene.add(root);
   clips = animations; mixer = new THREE.AnimationMixer(root); current = asset; playing = true;
   $('clip-filter').value = '';
@@ -132,11 +213,21 @@ function install(model, animations, asset) {
   $('scale').value = 1; $('yaw').value = 0; $('wire').checked = false;
   for (const id of ['scale', 'yaw', 'wire', 'reset', 'export']) $(id).disabled = false;
   let triangles = 0, meshes = 0;
-  model.traverse(node => { if (node.isMesh) { meshes++; triangles += (node.geometry.index?.count || node.geometry.attributes.position?.count || 0) / 3; } });
+  model.traverse(node => {
+    if (!node.isMesh) return;
+    node.castShadow = true;
+    meshes++; triangles += (node.geometry.index?.count || node.geometry.attributes.position?.count || 0) / 3;
+  });
+  materialEntries = collectMaterials(model);
+  const textures = materialEntries.flatMap(entry => describeMaterial(entry.material).maps.map(map => map.texture));
+  const textureCount = new Set(textures.map(texture => texture.image)).size;
   $('about-source').textContent = sourceLabel(asset);
   $('about-updated').textContent = formatUpdated(asset.updated);
   $('about-size').textContent = `${meshes} parts, ${Math.round(triangles).toLocaleString()} triangles`;
   $('about-anims').textContent = clips.length ? `${clips.length} animation${clips.length === 1 ? '' : 's'}` : 'None. This is a still model.';
+  $('about-textures').textContent = textureCount ? `${textureCount}, about ${formatMegabytes(textureMemory(textures))} on the GPU` : 'None. Flat material colours.';
+  for (const id of ['channel']) $(id).disabled = false;
+  renderMaterials();
   highlightCurrent();
   selectClip(0);
   frame();
@@ -268,8 +359,11 @@ function importFiles(files) {
 
 function startNewCreation() {
   ++loadId;
-  if (root) { mixer?.stopAllAction(); if (mixer) mixer.uncacheRoot(root); scene.remove(root); disposeObject(root); }
+  if (root) { showOriginal(); mixer?.stopAllAction(); if (mixer) mixer.uncacheRoot(root); scene.remove(root); disposeObject(root); }
   root = undefined; mixer = undefined; action = undefined; clips = []; clipIndex = 0; current = null;
+  channelView.reset(); isolated = null; materialEntries = []; $('channel').value = 'lit'; $('channel').disabled = true;
+  renderMaterials();
+  $('about-textures').textContent = '—';
   $('title').textContent = 'New creation';
   $('metadata').textContent = 'A blank Blender scene';
   $('empty-stage').hidden = false;
@@ -311,12 +405,50 @@ $('play').onclick = () => { playing = !playing; updatePlay(); };
 $('restart').onclick = () => { if (action) { action.reset().play(); mixer.update(0); } };
 $('timeline').oninput = event => { if (action) { action.time = Number(event.target.value) * action.getClip().duration; mixer.update(0); } };
 $('grid').onchange = event => { grid.visible = event.target.checked; };
-$('wire').onchange = event => root?.traverse(node => {
-  for (const material of node.material ? [node.material].flat() : []) {
-    if (!originalWire.has(material)) originalWire.set(material, material.wireframe);
-    material.wireframe = event.target.checked || originalWire.get(material);
-  }
-});
+$('wire').onchange = event => {
+  channelView.restore();
+  root?.traverse(node => {
+    for (const material of node.material ? [node.material].flat() : []) {
+      if (!originalWire.has(material)) originalWire.set(material, material.wireframe);
+      material.wireframe = event.target.checked || originalWire.get(material);
+    }
+  });
+  refreshView();
+};
+$('channel').onchange = () => {
+  refreshView();
+  const channel = CHANNELS.find(item => item.id === $('channel').value);
+  const missingUv = $('channel').value === 'uv' && materialEntries.some(entry => !entry.hasUv);
+  status(missingUv ? 'Some parts have no UVs, so the checker shows one flat colour on them' : `Showing ${channel.name}`);
+};
+
+function syncLightingControls() {
+  const { preset, exposure, environmentIntensity, turn } = lighting.state;
+  $('light-preset').value = preset.id;
+  $('exposure').value = exposure; $('exposure-value').textContent = Number(exposure).toFixed(2);
+  $('env-intensity').value = environmentIntensity; $('env-value').textContent = Number(environmentIntensity).toFixed(2);
+  $('env-intensity').disabled = !preset.environment;
+  $('light-turn').value = turn; $('turn-value').textContent = `${turn}°`;
+}
+async function useLighting(id) {
+  const preset = lighting.use(id);
+  syncLightingControls();
+  await preset;
+  syncLightingControls();
+}
+$('light-preset').replaceChildren(...LIGHTING_PRESETS.map(preset => new Option(preset.name, preset.id)));
+$('channel').replaceChildren(...CHANNELS.map(channel => new Option(channel.name, channel.id)));
+$('light-preset').onchange = event => useLighting(event.target.value);
+$('exposure').oninput = event => { lighting.setExposure(Number(event.target.value)); syncLightingControls(); };
+$('env-intensity').oninput = event => { lighting.setEnvironmentIntensity(Number(event.target.value)); syncLightingControls(); };
+$('light-turn').oninput = event => { lighting.setTurn(Number(event.target.value)); syncLightingControls(); };
+$('shadows').onchange = event => lighting.setShadows(event.target.checked);
+$('env-background').onchange = event => lighting.setBackground(event.target.checked);
+function cycle(select, direction = 1) {
+  if (select.disabled) return;
+  select.selectedIndex = (select.selectedIndex + direction + select.options.length) % select.options.length;
+  select.dispatchEvent(new Event('change'));
+}
 $('rotate').onchange = event => { orbit.autoRotate = event.target.checked; };
 $('scale').onchange = event => {
   const value = Number(event.target.value);
@@ -347,7 +479,8 @@ $('export').onclick = async () => {
   button.disabled = true;
   status('Preparing the GLB download…');
   try {
-    const buffer = await new GLTFExporter().parseAsync(root, { binary: true, animations: clips });
+    showOriginal();  // export the model's own materials, with every part visible
+    const buffer = await new GLTFExporter().parseAsync(root, { binary: true, animations: clips }).finally(refreshView);
     download(new Blob([buffer], { type: 'model/gltf-binary' }), `${current?.name ?? 'creation'}-lab.glb`);
     status('Downloaded a GLB copy with its animations and transforms');
   } catch (error) {
@@ -364,6 +497,10 @@ window.addEventListener('keydown', event => {
     if (action) { event.preventDefault(); $('play').click(); }
   } else if (event.key.toLowerCase() === 'f') {
     frame();
+  } else if (event.key.toLowerCase() === 'l') {
+    cycle($('light-preset'), event.shiftKey ? -1 : 1);
+  } else if (event.key.toLowerCase() === 'v') {
+    cycle($('channel'), event.shiftKey ? -1 : 1);
   } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
     event.preventDefault();
     step(event.key === 'ArrowDown' ? 1 : -1);
@@ -391,6 +528,8 @@ renderer.setAnimationLoop(() => {
 
 updatePlay();
 renderClips();
+renderMaterials();
+useLighting(LIGHTING_PRESETS[0].id);
 fetch(`${import.meta.env.BASE_URL}models/manifest.json`)
   .then(response => { if (!response.ok) throw Error('Manifest unavailable'); return response.json(); })
   .then(entries => {

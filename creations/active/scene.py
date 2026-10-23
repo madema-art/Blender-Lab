@@ -4,214 +4,79 @@ two animations (Wing beat and Idle) for Blender Lab's active creation.
 Blender is Z-up and the griffon faces -Y; the glTF exporter converts to Y-up. Units are metres.
 Every mesh is built directly in world space, then rigidly parented to a bone of one armature, so
 both animations live on a single rig.
+
+Materials are Blender Lab recipes (tools/lab_materials.py). The builder bakes the fur, plumage,
+skin, scales and keratin into one UV atlas with ambient occlusion, gives every feather a shared
+feather-card texture tinted per feather tract, and paints the eyes with a generated iris.
 """
 
 import math
 
 import bpy
 from mathutils import Matrix, Vector
-from mathutils.bvhtree import BVHTree
 
+from tools import lab_materials as lab
+from tools import lab_shapes as shapes
+from tools.lab_shapes import CONTOUR, FLIGHT, PRIMARY, ellipsoid, feather, frame, loft
 
-def material(name, color, roughness=0.6, emission=0.0, metallic=0.0):
-    mat = bpy.data.materials.new(name=name)
-    mat.diffuse_color = (*color, 1.0)
-    shader = mat.node_tree.nodes.get("Principled BSDF")
-    shader.inputs["Base Color"].default_value = (*color, 1.0)
-    shader.inputs["Roughness"].default_value = roughness
-    shader.inputs["Metallic"].default_value = metallic
-    if emission:
-        shader.inputs["Emission Color"].default_value = (*color, 1.0)
-        shader.inputs["Emission Strength"].default_value = emission
-    return mat
+lab.configure(name="Griffon", atlas_size=1024, card_size=1024, ao_distance=0.3)
 
+# Atlas recipes: baked together into one texture set. `texel` weights where resolution is spent.
+fur = lab.surface("Tawny lion fur", "fur", (0.50, 0.31, 0.12), color2=(0.56, 0.38, 0.18), belly=(0.5, 1.1),
+                  flow="y", scale=0.045, roughness=0.84, bump=0.6)
+fur_dark = lab.surface("Dark tail tuft", "fur", (0.09, 0.055, 0.03), flow="y", scale=0.03, roughness=0.88, texel=0.8)
+plumage = lab.surface("Cream breast plumage", "plumage", (0.86, 0.8, 0.68), scale=0.018, bump=0.35, texel=0.6)
+face = lab.surface("Cream face plumage", "plumage", (0.88, 0.83, 0.72), scale=0.012, variation=0.2, bump=0.3, texel=2.2)
+wing_plumage = lab.surface("Gilded wing plumage", "plumage", (0.62, 0.4, 0.13), scale=0.02, texel=0.4)
+beak_mat = lab.surface("Polished gold beak", "keratin", (0.92, 0.56, 0.07), tip=(0, -1.2, 1.87), tip_radius=0.16,
+                       tip_color=(0.16, 0.09, 0.03), root=(0, -0.97, 2.05), root_color=(0.98, 0.72, 0.2),
+                       grain="y", roughness=0.24, variation=0.9, contrast=0.5, bump=0.8, texel=2.5)
+cere_mat = lab.surface("Yellow cere", "skin", (0.85, 0.6, 0.11), scale=0.005, roughness=0.45, texel=2.5)
+nostril = lab.surface("Nostrils", "skin", (0.03, 0.02, 0.015), scale=0.004, texel=0.5)
+leg_scales = lab.surface("Yellow leg scales", "scales", (0.82, 0.58, 0.11), scale=0.02, roughness=0.42, texel=1.6)
+talon_mat = lab.surface("Black talons", "keratin", (0.035, 0.032, 0.03), grain="z", roughness=0.2, variation=0.8, texel=1.4)
 
-fur = material("Tawny lion fur", (0.50, 0.32, 0.13), 0.85)
-fur_dark = material("Dark tail tuft", (0.10, 0.06, 0.03), 0.9)
-pad = material("Paw pads", (0.08, 0.05, 0.04), 0.7)
-cream = material("Cream head feathers", (0.88, 0.82, 0.70), 0.7)
-gold = material("Golden mantle feathers", (0.72, 0.48, 0.16), 0.6)
-bronze = material("Bronze secondaries", (0.36, 0.20, 0.08), 0.55)
-umber = material("Umber primaries", (0.11, 0.065, 0.035), 0.5)
-covert = material("Gilded coverts", (0.62, 0.40, 0.13), 0.5)
-beak_mat = material("Polished gold beak", (0.96, 0.6, 0.07), 0.25, metallic=0.2)
-cere_mat = material("Yellow cere and scales", (0.85, 0.62, 0.12), 0.45)
-talon_mat = material("Black talons", (0.03, 0.03, 0.035), 0.2)
-iris = material("Amber eyes", (1.0, 0.5, 0.04), 0.15, emission=0.6)
-pupil = material("Pupils", (0.0, 0.0, 0.0), 0.05)
+# Card recipes: every feather shares one feather texture, tinted by its tract's colour.
+cream = lab.surface("Cream head feathers", "feather", (0.88, 0.82, 0.70))
+gold = lab.surface("Golden mantle feathers", "feather", (0.72, 0.48, 0.16))
+bronze = lab.surface("Bronze secondaries", "feather", (0.36, 0.20, 0.08))
+umber = lab.surface("Umber primaries", "feather", (0.13, 0.08, 0.045))
+covert = lab.surface("Gilded coverts", "feather", (0.62, 0.40, 0.13))
+iris = lab.surface("Amber eyes", "eye", (1.0, 0.46, 0.03), color2=(0.3, 0.14, 0.03), pupil=0.1, iris_radius=0.32, glow=0.35)
 
 parts = []  # (object, bone name)
 
+# Feather-card variants: 0 plain, 1 barred, 2 pale tip with a shaft streak, 3 mottled.
+PLAIN, ALL = (0, 2), (0, 1, 2, 3)
 
-# ---------------------------------------------------------------- geometry helpers
 
-def make_object(name, mat, verts, faces, bone, smooth=True):
-    mesh = bpy.data.meshes.new(name)
-    mesh.from_pydata([tuple(v) for v in verts], [], faces)
-    mesh.validate()
-    for polygon in mesh.polygons:
-        polygon.use_smooth = smooth
-    mesh.materials.append(mat)
-    obj = bpy.data.objects.new(name, mesh)
-    bpy.context.collection.objects.link(obj)
+def part(name, mat, piece, bone):
+    obj = shapes.make_object(name, mat, piece)
     parts.append((obj, bone))
     return obj
 
 
-class Batch:
-    """Collects many small pieces (feathers, scales, claws) into one mesh per material and bone."""
+class Batch(shapes.Batch):
+    """A shapes.Batch that remembers the bone its object rides on."""
 
     def __init__(self, name, mat, bone):
-        self.name, self.mat, self.bone = name, mat, bone
-        self.verts, self.faces = [], []
+        super().__init__(name, mat)
+        self.bone = bone
 
-    def add(self, verts, faces):
-        base = len(self.verts)
-        self.verts.extend(verts)
-        self.faces.extend([tuple(i + base for i in face) for face in faces])
+    def pick(self, options=ALL):
+        return options[self.variant(len(options))]
 
     def build(self):
-        if self.faces:
-            return make_object(self.name, self.mat, self.verts, self.faces, self.bone)
-
-
-def mirrored(verts, faces):
-    return [Vector((-v.x, v.y, v.z)) for v in verts], [tuple(reversed(face)) for face in faces]
-
-
-def loft(points, ring=12):
-    """Tube through (position, radius_side, radius_up) points, using parallel-transported frames.
-    A zero radius at either end closes it into a point."""
-    centres = [Vector(p[0]) for p in points]
-    tangents = []
-    for i in range(len(centres)):
-        a = centres[max(i - 1, 0)]
-        b = centres[min(i + 1, len(centres) - 1)]
-        tangents.append((b - a).normalized())
-    up = Vector((0, 0, 1)) if abs(tangents[0].z) < 0.9 else Vector((0, 1, 0))
-    normal = (up - tangents[0] * up.dot(tangents[0])).normalized()
-    verts, faces, rings = [], [], []
-    for i, (centre, tangent) in enumerate(zip(centres, tangents)):
-        normal = (normal - tangent * normal.dot(tangent)).normalized()
-        side = tangent.cross(normal).normalized()
-        rs, ru = points[i][1], points[i][2]
-        if rs == 0 and ru == 0:
-            rings.append([len(verts)])
-            verts.append(centre.copy())
-            continue
-        start = len(verts)
-        for k in range(ring):
-            angle = 2 * math.pi * k / ring
-            verts.append(centre + side * (math.cos(angle) * rs) + normal * (math.sin(angle) * ru))
-        rings.append(list(range(start, start + ring)))
-    for a, b in zip(rings, rings[1:]):
-        if len(a) == 1 and len(b) == 1:
-            continue
-        if len(a) == 1:
-            faces += [(a[0], b[(k + 1) % ring], b[k]) for k in range(ring)]
-        elif len(b) == 1:
-            faces += [(a[k], a[(k + 1) % ring], b[0]) for k in range(ring)]
-        else:
-            faces += [(a[k], a[(k + 1) % ring], b[(k + 1) % ring], b[k]) for k in range(ring)]
-    if len(rings[0]) > 1:
-        faces.append(tuple(reversed(rings[0])))
-    if len(rings[-1]) > 1:
-        faces.append(tuple(rings[-1]))
-    return verts, faces
-
-
-def ellipsoid(centre, radii, rotation=Matrix.Identity(3), segments=20, rings=12):
-    centre = Vector(centre)
-    verts = [centre + rotation @ Vector((0, 0, -radii[2]))]
-    for r in range(1, rings):
-        phi = math.pi * r / rings - math.pi / 2
-        for s in range(segments):
-            theta = 2 * math.pi * s / segments
-            local = Vector((math.cos(phi) * math.cos(theta) * radii[0],
-                            math.cos(phi) * math.sin(theta) * radii[1],
-                            math.sin(phi) * radii[2]))
-            verts.append(centre + rotation @ local)
-    verts.append(centre + rotation @ Vector((0, 0, radii[2])))
-    faces = [(0, 1 + (s + 1) % segments, 1 + s) for s in range(segments)]
-    for r in range(rings - 2):
-        a, b = 1 + r * segments, 1 + (r + 1) * segments
-        faces += [(a + s, a + (s + 1) % segments, b + (s + 1) % segments, b + s) for s in range(segments)]
-    top, last = len(verts) - 1, 1 + (rings - 2) * segments
-    faces += [(last + s, last + (s + 1) % segments, top) for s in range(segments)]
-    return verts, faces
-
-
-FLIGHT = (0.22, 0.8, 1.0, 1.0, 1.0, 0.97, 0.88, 0.66, 0.0)
-PRIMARY = (0.2, 0.75, 0.95, 1.0, 0.95, 0.88, 0.75, 0.5, 0.0)
-CONTOUR = (0.3, 0.85, 1.0, 1.0, 0.9, 0.7, 0.4, 0.0)
-
-
-def feather(matrix, length, width, profile=FLIGHT, curl=0.0, ridge=0.012):
-    """A cambered feather with a raised rachis, lying along local +X with its top facing +Z."""
-    verts, faces = [], []
-    rows = len(profile)
-    for i, w in enumerate(profile):
-        t = i / (rows - 1)
-        x = t * length
-        z = curl * t * t * length
-        half = w * width * 0.5
-        if i == rows - 1:
-            verts.append(matrix @ Vector((x, 0, z)))
-            continue
-        droop = -0.25 * half
-        verts += [matrix @ Vector((x, -half, z + droop)),
-                  matrix @ Vector((x, 0, z + ridge * (1 - t))),
-                  matrix @ Vector((x, half, z + droop))]
-    for i in range(rows - 2):
-        a, b = 3 * i, 3 * (i + 1)
-        faces += [(a, a + 1, b + 1, b), (a + 1, a + 2, b + 2, b + 1)]
-    tip, a = len(verts) - 1, 3 * (rows - 2)
-    faces += [(a, a + 1, tip), (a + 1, a + 2, tip)]
-    return verts, faces
-
-
-def frame(position, direction, up):
-    """Matrix placing local +X along direction and +Z towards up."""
-    x = Vector(direction).normalized()
-    z = (Vector(up) - x * Vector(up).dot(x)).normalized()
-    y = z.cross(x)
-    m = Matrix((x, y, z)).transposed().to_4x4()
-    m.translation = Vector(position)
-    return m
+        obj = super().build()
+        if obj:
+            parts.append((obj, self.bone))
+        return obj
 
 
 def skin_body(name, mat, bone, nodes, edges):
-    """Organic trunk from a skin-modifier skeleton: nodes are (position, radius_side, radius_up)."""
-    mesh = bpy.data.meshes.new(name + " skeleton")
-    mesh.from_pydata([n[0] for n in nodes], edges, [])
-    obj = bpy.data.objects.new(name, mesh)
-    bpy.context.collection.objects.link(obj)
-    obj.modifiers.new("Skin", "SKIN")
-    for i, node in enumerate(nodes):
-        mesh.skin_vertices[0].data[i].radius = (node[1], node[2])
-    mesh.skin_vertices[0].data[0].use_root = True
-    subsurf = obj.modifiers.new("Smooth", "SUBSURF")
-    subsurf.levels = subsurf.render_levels = 2
-    depsgraph = bpy.context.evaluated_depsgraph_get()
-    baked = bpy.data.meshes.new_from_object(obj.evaluated_get(depsgraph))
-    obj.modifiers.clear()
-    obj.data = baked
-    baked.name = name
-    for polygon in baked.polygons:
-        polygon.use_smooth = True
-    baked.materials.append(mat)
-    bpy.data.meshes.remove(mesh)
+    obj = shapes.skin_body(name, mat, nodes, edges)
     parts.append((obj, bone))
     return obj
-
-
-def bvh_of(*objects):
-    verts, faces = [], []
-    for obj in objects:
-        base = len(verts)
-        verts += [obj.matrix_world @ v.co for v in obj.data.vertices]
-        faces += [[i + base for i in p.vertices] for p in obj.data.polygons]
-    return BVHTree.FromPolygons(verts, faces)
 
 
 # ---------------------------------------------------------------- anatomy landmarks
@@ -244,11 +109,11 @@ lion = skin_body("Griffon | Lion body", fur, "body", lion_nodes, lion_edges)
 toes = Batch("Griffon | Hind paws", fur, "body")
 claws = Batch("Griffon | Hind claws", talon_mat, "body")
 for side, _ in SIDES:
-    toes.add(*ellipsoid((0.25 * side, 0.6, 0.075), (0.09, 0.13, 0.07), segments=16, rings=10))
+    toes.add(ellipsoid((0.25 * side, 0.6, 0.075), (0.09, 0.13, 0.07), segments=16, rings=10))
     for k, dx in enumerate((-0.06, -0.02, 0.02, 0.06)):
         centre = Vector((0.25 * side + dx * side, 0.5 - 0.015 * (k in (1, 2)), 0.05))
-        toes.add(*ellipsoid(centre, (0.032, 0.045, 0.04), segments=12, rings=8))
-        claws.add(*loft([(centre + Vector((0, -0.03, 0.01)), 0.012, 0.014),
+        toes.add(ellipsoid(centre, (0.032, 0.045, 0.04), segments=12, rings=8))
+        claws.add(loft([(centre + Vector((0, -0.03, 0.01)), 0.012, 0.014),
                          (centre + Vector((0, -0.065, 0.0)), 0.006, 0.008),
                          (centre + Vector((0, -0.08, -0.03)), 0, 0)], ring=6))
 toes.build()
@@ -260,7 +125,7 @@ claws.build()
 tail_path = [((0, 0.84, 1.15), 0.075, 0.075), ((0, 1.08, 1.24), 0.062, 0.062), ((0, 1.32, 1.17), 0.052, 0.052),
              ((0, 1.48, 0.98), 0.046, 0.046), ((0, 1.58, 0.76), 0.042, 0.042), ((0, 1.72, 0.6), 0.04, 0.04),
              ((0, 1.9, 0.6), 0.038, 0.038), ((0, 2.02, 0.7), 0.03, 0.03), ((0, 2.06, 0.76), 0, 0)]
-make_object("Griffon | Tail", fur, *loft(tail_path, ring=12), "tail")
+part("Griffon | Tail", fur, loft(tail_path, ring=12), "tail")
 tuft = Batch("Griffon | Tail tuft", fur_dark, "tail")
 end, along = Vector((0, 2.0, 0.69)), Vector((0, 0.5, 0.86)).normalized()
 for k in range(18):
@@ -268,7 +133,7 @@ for k in range(18):
     spread = Vector((math.cos(angle), 0, math.sin(angle))) * (0.35 + 0.25 * (k % 3) / 2)
     direction = (along + spread).normalized()
     length = 0.2 + 0.06 * ((k * 7) % 4) / 3
-    tuft.add(*loft([(end, 0.035, 0.035), (end + direction * length * 0.5, 0.03, 0.03), (end + direction * length, 0, 0)], ring=6))
+    tuft.add(loft([(end, 0.035, 0.035), (end + direction * length * 0.5, 0.03, 0.03), (end + direction * length, 0, 0)], ring=6))
 tuft.build()
 
 
@@ -286,11 +151,11 @@ for side, _ in SIDES:
     start = len(front_nodes)
     front_nodes += [((0.21 * side, -0.44, 0.92), 0.15, 0.16), ((0.25 * side, -0.5, 0.6), 0.1, 0.1)]
     front_edges += [(0, start), (start, start + 1)]
-front = skin_body("Griffon | Feathered breast", cream, "body", front_nodes, front_edges)
+front = skin_body("Griffon | Feathered breast", plumage, "body", front_nodes, front_edges)
 
 
 # Eagle forelegs: ridged yellow scales over the tarsus, four toes, and hooked black talons.
-scales = Batch("Griffon | Scaled forelegs", cere_mat, "body")
+scales = Batch("Griffon | Scaled forelegs", leg_scales, "body")
 talons = Batch("Griffon | Talons", talon_mat, "body")
 for side, _ in SIDES:
     top, ankle = Vector((0.25 * side, -0.5, 0.62)), Vector((0.25 * side, -0.58, 0.1))
@@ -299,15 +164,15 @@ for side, _ in SIDES:
         t = i / 14
         radius = (0.064 - 0.014 * t) * (1.0 if i % 2 else 1.1)
         ridges.append((top.lerp(ankle, t), radius, radius))
-    scales.add(*loft(ridges, ring=10))
-    scales.add(*ellipsoid(ankle + Vector((0, 0, -0.02)), (0.06, 0.06, 0.045), segments=12, rings=8))
+    scales.add(loft(ridges, ring=10))
+    scales.add(ellipsoid(ankle + Vector((0, 0, -0.02)), (0.06, 0.06, 0.045), segments=12, rings=8))
     for yaw, length in ((-0.45, 0.2), (0.0, 0.24), (0.45, 0.2), (math.pi, 0.12)):
         direction = Vector((math.sin(yaw) * side, -math.cos(yaw), 0))
         base = ankle + Vector((0, 0, -0.03))
         knuckle = base + direction * (length * 0.55) + Vector((0, 0, 0.0))
         tip = base + direction * length + Vector((0, 0, -0.035))
-        scales.add(*loft([(base, 0.035, 0.03), (knuckle, 0.03, 0.03), (tip, 0.024, 0.022)], ring=8))
-        talons.add(*loft([(tip + direction * -0.01 + Vector((0, 0, 0.012)), 0.02, 0.022),
+        scales.add(loft([(base, 0.035, 0.03), (knuckle, 0.03, 0.03), (tip, 0.024, 0.022)], ring=8))
+        talons.add(loft([(tip + direction * -0.01 + Vector((0, 0, 0.012)), 0.02, 0.022),
                           (tip + direction * 0.04 + Vector((0, 0, 0.0)), 0.013, 0.015),
                           (tip + direction * 0.075 + Vector((0, 0, -0.025)), 0.007, 0.008),
                           (tip + direction * 0.085 + Vector((0, 0, -0.055)), 0, 0)], ring=8))
@@ -318,34 +183,35 @@ talons.build()
 # ---------------------------------------------------------------- eagle head
 
 skull_rot = Matrix.Rotation(-0.12, 3, "X")
-make_object("Griffon | Skull", cream, *ellipsoid(HEAD, (0.15, 0.2, 0.155), skull_rot, 28, 16), "head")
-make_object("Griffon | Cheeks", cream, *ellipsoid(HEAD + Vector((0, -0.07, -0.07)), (0.135, 0.15, 0.11), segments=24, rings=12), "head")
+part("Griffon | Skull", face, ellipsoid(HEAD, (0.15, 0.2, 0.155), skull_rot, 28, 16), "head")
+part("Griffon | Cheeks", face, ellipsoid(HEAD + Vector((0, -0.07, -0.07)), (0.135, 0.15, 0.11), segments=24, rings=12), "head")
 
 for side, _ in SIDES:
     # A heavy brow ridge gives the eagle's stern glare.
     brow = Matrix.Rotation(-0.35 * side, 3, "Y") @ Matrix.Rotation(0.25, 3, "X")
-    make_object(f"Griffon | Brow {side:+d}", cream, *ellipsoid(HEAD + Vector((0.085 * side, -0.13, 0.05)), (0.06, 0.1, 0.026), brow, 16, 10), "head")
-    eye = HEAD + Vector((0.112 * side, -0.13, 0.02))
-    make_object(f"Griffon | Eye {side:+d}", iris, *ellipsoid(eye, (0.03, 0.034, 0.034), segments=16, rings=10), "head")
-    make_object(f"Griffon | Pupil {side:+d}", pupil, *ellipsoid(eye + Vector((0.022 * side, -0.012, 0)), (0.012, 0.016, 0.017), segments=12, rings=8), "head")
+    part(f"Griffon | Brow {side:+d}", face, ellipsoid(HEAD + Vector((0.085 * side, -0.13, 0.05)), (0.06, 0.1, 0.026), brow, 16, 10), "head")
+    # The eye's +Z pole looks out and forward; its generated iris centres on that pole.
+    eye = HEAD + Vector((0.114 * side, -0.132, 0.02))
+    gaze = Vector((0, 0, 1)).rotation_difference(Vector((0.85 * side, -0.5, 0.04))).to_matrix()
+    part(f"Griffon | Eye {side:+d}", iris, ellipsoid(eye, (0.034, 0.034, 0.031), gaze, segments=20, rings=14), "head")
 
 # Hooked upper mandible, lower mandible on its own jaw bone, cere and nostrils.
 beak = [((0, -0.98, 2.05), 0.085, 0.085), ((0, -1.05, 2.05), 0.07, 0.075), ((0, -1.12, 2.03), 0.055, 0.062),
         ((0, -1.18, 1.99), 0.042, 0.05), ((0, -1.21, 1.93), 0.03, 0.036), ((0, -1.21, 1.87), 0.017, 0.02),
         ((0, -1.185, 1.83), 0, 0)]
-make_object("Griffon | Upper beak", beak_mat, *loft(beak, ring=16), "head")
+part("Griffon | Upper beak", beak_mat, loft(beak, ring=16), "head")
 mandible = [((0, -0.95, 1.975), 0.072, 0.04), ((0, -1.04, 1.962), 0.056, 0.032), ((0, -1.11, 1.958), 0.038, 0.022),
             ((0, -1.15, 1.962), 0, 0)]
-make_object("Griffon | Lower beak", beak_mat, *loft(mandible, ring=14), "jaw")
-make_object("Griffon | Cere", cere_mat, *loft([((0, -0.955, 2.06), 0.092, 0.092), ((0, -1.0, 2.07), 0.08, 0.075), ((0, -1.02, 2.075), 0, 0)], ring=16), "head")
+part("Griffon | Lower beak", beak_mat, loft(mandible, ring=14), "jaw")
+part("Griffon | Cere", cere_mat, loft([((0, -0.955, 2.06), 0.092, 0.092), ((0, -1.0, 2.07), 0.08, 0.075), ((0, -1.02, 2.075), 0, 0)], ring=16), "head")
 for side, _ in SIDES:
-    make_object(f"Griffon | Nostril {side:+d}", pupil, *ellipsoid((0.045 * side, -1.0, 2.085), (0.008, 0.016, 0.009), segments=8, rings=6), "head")
+    part(f"Griffon | Nostril {side:+d}", nostril, ellipsoid((0.045 * side, -1.0, 2.085), (0.008, 0.016, 0.009), segments=8, rings=6), "head")
 
 
 # ---------------------------------------------------------------- feather coat over the head, neck and breast
 # Feathers flow away from the beak, snapped onto the real surface, shading from cream to gold.
 
-surface = bvh_of(front, *[obj for obj, bone in parts if obj.name in ("Griffon | Skull", "Griffon | Cheeks")])
+surface = shapes.bvh_of(front, *[obj for obj, bone in parts if obj.name in ("Griffon | Skull", "Griffon | Cheeks")])
 coat_cream = Batch("Griffon | Hackles cream", cream, "body")
 coat_gold = Batch("Griffon | Mantle gold", gold, "body")
 coat_head = Batch("Griffon | Crown feathers", cream, "head")
@@ -373,13 +239,9 @@ for r in range(rows):
             continue
         size = 0.09 + 0.12 * v + 0.03 * ((k * 5 + r) % 3) / 2
         place = frame(location + normal * 0.006, flow + normal * 0.18, normal)
-        piece = feather(place, size, size * 0.62, CONTOUR, curl=-0.12, ridge=0.006)
-        if location.z > 1.96 and location.y > -0.95:
-            coat_head.add(*piece)
-        elif v < 0.5:
-            coat_cream.add(*piece)
-        else:
-            coat_gold.add(*piece)
+        batch = coat_head if location.z > 1.96 and location.y > -0.95 else coat_cream if v < 0.5 else coat_gold
+        batch.add(feather(place, size, size * 0.62, CONTOUR, curl=-0.12, ridge=0.006,
+                          variant=batch.pick(ALL if batch is coat_gold else PLAIN)))
 
 # Feathered trousers over the upper forelegs, falling towards the scales.
 for side, _ in SIDES:
@@ -390,14 +252,14 @@ for side, _ in SIDES:
             probe = centre + Vector((math.cos(angle), math.sin(angle), 0)) * 0.5
             location, normal, _, _ = surface.find_nearest(probe)
             place = frame(location + normal * 0.005, Vector((0, 0, -1)) + normal * 0.25, normal)
-            coat_gold.add(*feather(place, 0.15 + 0.02 * i, 0.09, CONTOUR, curl=-0.1, ridge=0.005))
+            coat_gold.add(feather(place, 0.15 + 0.02 * i, 0.09, CONTOUR, curl=-0.1, ridge=0.005, variant=coat_gold.pick()))
 
 # Feathered ear tufts sweeping back from the crown.
 for side, _ in SIDES:
     for k, (lift, length) in enumerate(((0.0, 0.28), (0.12, 0.22), (-0.1, 0.2))):
         base = HEAD + Vector((0.085 * side, 0.04 + 0.03 * k, 0.1))
         direction = Vector((0.25 * side, 1.0, 0.45 + lift))
-        coat_head.add(*feather(frame(base, direction, Vector((0.5 * side, 0, 1))), length, 0.05, CONTOUR, curl=0.2, ridge=0.008))
+        coat_head.add(feather(frame(base, direction, Vector((0.5 * side, 0, 1))), length, 0.05, CONTOUR, curl=0.2, ridge=0.008, variant=2))
 
 for batch in (coat_cream, coat_gold, coat_head):
     batch.build()
@@ -414,18 +276,17 @@ ELBOW, WRIST, TIP = Vector((0.62, 0.22, 0.0)), Vector((1.3, -0.04, 0.05)), Vecto
 
 wing_batches = {}
 for side, tag in SIDES:
-    for key, mat, bone in (("arm", covert, "wing"), ("secondaries", bronze, "wing"), ("coverts", covert, "wing"),
-                           ("lesser", gold, "wing"), ("hand", covert, "hand"), ("primaries", umber, "hand"),
+    for key, mat, bone in (("arm", wing_plumage, "wing"), ("secondaries", bronze, "wing"), ("coverts", covert, "wing"),
+                           ("lesser", gold, "wing"), ("hand", wing_plumage, "hand"), ("primaries", umber, "hand"),
                            ("primary coverts", bronze, "hand")):
         wing_batches[(tag, key)] = Batch(f"Griffon | {tag} wing {key}", mat, f"{bone}.{tag}")
 
 ws = Matrix.Translation(SHOULDER) @ Matrix.Rotation(-RAISE, 4, "Y") @ Matrix.Rotation(SWEEP, 4, "Z")
 
 
-def add_wing(key, verts, faces):
+def add_wing(key, piece):
     for side, tag in SIDES:
-        v, f = (verts, faces) if side == 1 else mirrored(verts, faces)
-        wing_batches[(tag, key)].add(v, f)
+        wing_batches[(tag, key)].add(piece if side == 1 else piece.mirrored())
 
 
 def on_arm(x):
@@ -437,19 +298,19 @@ def on_arm(x):
     return WRIST.lerp(TIP, min((x - WRIST.x) / (TIP.x - WRIST.x), 1.0))
 
 
-def add_wing_bone(key, verts, faces):
-    add_wing(key, [ws @ v for v in verts], faces)
+def add_wing_bone(key, piece):
+    add_wing(key, piece.transformed(ws))
 
 
-add_wing_bone("arm", *loft([((-0.14, 0, 0), 0, 0), ((-0.08, 0, 0), 0.09, 0.08), ((0, 0, 0), 0.11, 0.09), (ELBOW, 0.065, 0.055), (WRIST, 0.05, 0.045)], ring=14))
-add_wing_bone("arm", *ellipsoid(WRIST, (0.058, 0.058, 0.05), segments=14, rings=8))
-add_wing_bone("hand", *loft([(WRIST, 0.048, 0.042), (WRIST.lerp(TIP, 0.5), 0.036, 0.03), (TIP, 0.02, 0.017), (TIP + Vector((0.06, 0.02, 0)), 0, 0)], ring=12))
+add_wing_bone("arm", loft([((-0.14, 0, 0), 0, 0), ((-0.08, 0, 0), 0.09, 0.08), ((0, 0, 0), 0.11, 0.09), (ELBOW, 0.065, 0.055), (WRIST, 0.05, 0.045)], ring=14))
+add_wing_bone("arm", ellipsoid(WRIST, (0.058, 0.058, 0.05), segments=14, rings=8))
+add_wing_bone("hand", loft([(WRIST, 0.048, 0.042), (WRIST.lerp(TIP, 0.5), 0.036, 0.03), (TIP, 0.02, 0.017), (TIP + Vector((0.06, 0.02, 0)), 0, 0)], ring=12))
 
 
 def wing_feather(key, x, angle, length, width, lift, profile=FLIGHT, curl=-0.05, roll=0.0, back=0.0):
     base = on_arm(x) + Vector((0, 0.03 + back, lift))
     local = Matrix.Translation(base) @ Matrix.Rotation(angle, 4, "Z") @ Matrix.Rotation(roll, 4, "X") @ Matrix.Rotation(-0.03, 4, "Y")
-    add_wing(key, *feather(ws @ local, length, width, profile, curl=curl))
+    add_wing(key, feather(ws @ local, length, width, profile, curl=curl, variant=wing_batches[("R", key)].pick()))
 
 
 # Tertials and secondaries along the arm, fanning slightly outwards.
@@ -489,7 +350,8 @@ for i in range(26):
         theta += 0.2 * (i % 2)
         outward = Vector((0, -math.cos(theta), math.sin(theta)))
         flow = Vector((0, math.sin(abs(theta)) * 0.3 + 0.7, math.copysign(math.cos(theta), theta)))
-        add_wing("lesser", *feather(ws @ frame(centre + outward * radius, flow, outward), 0.13, 0.085, CONTOUR, curl=-0.2, ridge=0.004))
+        add_wing("lesser", feather(ws @ frame(centre + outward * radius, flow, outward), 0.13, 0.085, CONTOUR, curl=-0.2,
+                                   ridge=0.004, variant=wing_batches[("R", "lesser")].pick(PLAIN)))
 # Small scale-like feathers sheathing the hand's leading edge.
 for i in range(10):
     t = i / 9

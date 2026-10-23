@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { disposeObject } from './dispose.js';
 
 const SIZE = 256;
@@ -6,7 +7,7 @@ const SIZE = 256;
 // Draws one still image per creation. Jobs run one at a time so a long shelf never floods the GPU.
 export function createThumbnails() {
   const results = new Map();
-  let renderer;
+  let renderer, environment;
   let queue = Promise.resolve();
 
   function getRenderer() {
@@ -15,15 +16,22 @@ export function createThumbnails() {
       renderer.setPixelRatio(1);
       renderer.setSize(SIZE, SIZE);
       renderer.outputColorSpace = THREE.SRGBColorSpace;
-      renderer.toneMapping = THREE.ACESFilmicToneMapping;
+      renderer.toneMapping = THREE.NeutralToneMapping;
+      // A soft studio environment, so metals and glossy textures read correctly in previews.
+      const pmrem = new THREE.PMREMGenerator(renderer);
+      environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+      pmrem.dispose();
     }
     return renderer;
   }
 
   function snapshot(model) {
+    const target = getRenderer();
     const scene = new THREE.Scene();
-    scene.add(new THREE.HemisphereLight(0xe7f6ff, 0x526252, 2.5));
-    const key = new THREE.DirectionalLight(0xffe9cc, 3);
+    scene.environment = environment;
+    scene.environmentIntensity = 0.6;
+    scene.add(new THREE.HemisphereLight(0xe7f6ff, 0x526252, 0.8));
+    const key = new THREE.DirectionalLight(0xffe9cc, 2.4);
     key.position.set(3, 5, 4);
     scene.add(key, model);
     const box = new THREE.Box3().setFromObject(model);
@@ -35,7 +43,6 @@ export function createThumbnails() {
     const camera = new THREE.PerspectiveCamera(30, 1, radius / 100, radius * 100);
     camera.position.set(0.9, 0.55, 1).normalize().multiplyScalar(distance);
     camera.lookAt(0, 0, 0);
-    const target = getRenderer();
     target.render(scene, camera);
     return target.domElement.toDataURL('image/png');
   }

@@ -92,7 +92,23 @@
             <dt>Updated</dt><dd id="about-updated">—</dd>
             <dt>Size</dt><dd id="about-size">—</dd>
             <dt>Animations</dt><dd id="about-anims">—</dd>
+            <dt>Textures</dt><dd id="about-textures">—</dd>
           </dl>
+        </section>
+        <section>
+          <h3>Lighting</h3>
+          <label class="field wide">Preset <select id="light-preset"></select></label>
+          <label class="slider"><span>Exposure</span> <input id="exposure" type="range" min="0.25" max="2.5" step="0.05" value="1"> <output id="exposure-value">1.00</output></label>
+          <label class="slider"><span>Environment</span> <input id="env-intensity" type="range" min="0" max="2" step="0.05" value="1"> <output id="env-value">1.00</output></label>
+          <label class="slider"><span>Light turn</span> <input id="light-turn" type="range" min="-180" max="180" step="5" value="0"> <output id="turn-value">0°</output></label>
+          <label class="check"><input id="shadows" type="checkbox" checked> Ground shadow</label>
+          <label class="check"><input id="env-background" type="checkbox"> Show environment</label>
+        </section>
+        <section>
+          <h3>Materials</h3>
+          <label class="field wide">View <select id="channel" disabled></select></label>
+          <p id="material-summary" class="muted"></p>
+          <ul id="materials" class="materials"></ul>
         </section>
         <section>
           <h3>Show</h3>
@@ -117,6 +133,8 @@
           <dl class="keys">
             <dt><kbd>Space</kbd></dt><dd>Play or pause</dd>
             <dt><kbd>F</kbd></dt><dd>Fit the model</dd>
+            <dt><kbd>L</kbd></dt><dd>Next lighting preset</dd>
+            <dt><kbd>V</kbd></dt><dd>Next material view</dd>
             <dt><kbd>↑</kbd> <kbd>↓</kbd></dt><dd>Previous or next creation</dd>
           </dl>
         </section>

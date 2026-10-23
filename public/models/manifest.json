@@ -2,7 +2,7 @@
   {
     "name": "Active Creation",
     "file": "active-creation.glb",
-    "updated": "2026-10-23T20:51:53+00:00"
+    "updated": "2026-10-23T21:43:08+00:00"
   },
   {
     "name": "Alien Flying Saucer",
@@ -264,5 +264,11 @@
     "file": "glowing-glass-cube.glb",
     "updated": "2026-10-20T19:14:13+00:00",
     "creationSource": "creations/glowing-glass-cube/scene.py"
+  },
+  {
+    "name": "Griffon (flat materials)",
+    "file": "griffon-flat-materials.glb",
+    "updated": "2026-10-23T20:51:53+00:00",
+    "creationSource": "creations/griffon-flat-materials/scene.py"
   }
 ]
