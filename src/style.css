@@ -1,5 +1,16 @@
 @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Instrument+Sans:wght@400;500;600&display=swap');
 
+/* One canvas and renderer, expanded to the window. No permanent play HUD. */
+body.play-mode { overflow: hidden; background: #000001; }
+body.play-mode .topbar, body.play-mode .library, body.play-mode .inspector,
+body.play-mode .stage-head, body.play-mode .transport,
+body.play-mode .viewport > :not(canvas) { display: none !important; }
+body.play-mode .layout { display: block; height: 100dvh; }
+body.play-mode .stage { display: block; height: 100dvh; padding: 0; }
+body.play-mode .viewport { position: fixed; inset: 0; width: 100vw; height: 100dvh; border: 0; border-radius: 0; background: #000001; }
+body.play-mode canvas { display:block; width:100%; height:100%; cursor: grab; }
+body.play-mode canvas:active { cursor: grabbing; }
+
 :root {
   --sea-ink: #0c1316;
   --harbor: #111b1f;

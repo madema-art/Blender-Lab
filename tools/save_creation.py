@@ -57,12 +57,16 @@ def save(name: str) -> str:
     source_dir.mkdir(parents=True)
     shutil.copyfile(ACTIVE_SOURCE, source_dir / "scene.py")
     shutil.copyfile(ACTIVE_GLB, MODELS / file_name)
-    entries.append({
+    saved = {
         "name": name,
         "file": file_name,
         "updated": active.get("updated"),
         "creationSource": f"creations/{slug}/scene.py",
-    })
+    }
+    for key in ("playProfile", "animationSources"):
+        if key in active:
+            saved[key] = active[key]
+    entries.append(saved)
     MANIFEST.write_text(json.dumps(entries, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     return file_name
 

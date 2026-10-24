@@ -46,6 +46,7 @@
             <p id="metadata"></p>
           </div>
           <div class="views" role="group" aria-label="Camera views">
+            <button id="enter-play" type="button" class="primary" aria-describedby="play-readiness" disabled>Enter Play Mode</button>
             <button id="frame" type="button" title="Fit the model in view (F)">Fit</button>
             <button id="front" type="button">Front</button>
             <button id="side" type="button">Side</button>
@@ -85,6 +86,7 @@
       </main>
 
       <aside class="inspector" aria-label="Details and settings">
+        <section><h3>Play Mode</h3><p id="play-readiness" class="muted">Choose a playable creature.</p></section>
         <section>
           <h3>About</h3>
           <dl>

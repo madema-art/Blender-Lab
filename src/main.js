@@ -3,6 +3,8 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 import { makeDemo } from './demo.js';
+import { PlayMode } from './play/mode.js';
+import { readiness } from './play/profiles.js';
 import { disposeObject } from './dispose.js';
 import { defaultClipIndex, formatUpdated, matchesSearch, newestFirst, sourceLabel } from './library.js';
 import { createThumbnails } from './thumbnails.js';
@@ -34,6 +36,28 @@ const grid = new THREE.GridHelper(20, 40, 0x52675c, 0x344840); grid.material.tra
 
 let root, mixer, action, clips = [], clipIndex = 0, playing = true, loadId = 0, current = null, statusTimer;
 let materialEntries = [], isolated = null;
+let savedInspection, lightingPending = false, modelLoading = false;
+const playMode = new PlayMode({ scene, camera, orbit, renderer, grid, onExit() {
+  if (savedInspection) {
+    selectClip(savedInspection.clipIndex);
+    if (action) { action.time = savedInspection.time; mixer.update(0); }
+    playing = savedInspection.playing; updatePlay(); refreshView();
+    savedInspection = null;
+  }
+} });
+function updatePlayReadiness() {
+  const reasons = modelLoading ? ['Wait for the creation to finish loading.'] : lightingPending ? ['Lighting is loading…'] : root ? readiness(current?.playProfile, clips, root) : ['Choose a playable creature.'];
+  $('enter-play').disabled = reasons.length > 0;
+  $('play-readiness').textContent = reasons.length ? reasons.join(' ') : 'WASD move · Shift run · Space takeoff · E/Q climb/descend · L land · G glide · R special · drag mouse to orbit · Esc return. Xbox: left/right sticks move/look; A takeoff, B land, X special, Y glide, RT speed/climb, LT descend, Menu return.';
+  $('enter-play').title = reasons.join(' ') || 'Enter the starfield playground';
+}
+$('enter-play').onclick = () => {
+  if (!root || playMode.active) return;
+  savedInspection = { clipIndex, time: action?.time || 0, playing };
+  showOriginal();
+  try { playMode.enter(root, mixer, clips, current.playProfile); }
+  catch (error) { savedInspection = null; refreshView(); status(error.message, true); }
+};
 const hiddenByIsolation = new Map();
 const loader = new GLTFLoader();
 const thumbnails = createThumbnails();
@@ -202,6 +226,8 @@ function renderMaterials() {
 }
 
 function install(model, animations, asset) {
+  playMode.exit();
+  modelLoading = false;
   if (root) { showOriginal(); mixer.stopAllAction(); mixer.uncacheRoot(root); scene.remove(root); disposeObject(root); }
   channelView.reset(); isolated = null; $('channel').value = 'lit';
   root = new THREE.Group(); root.name = 'LabTransform'; root.add(model); scene.add(root);
@@ -231,6 +257,7 @@ function install(model, animations, asset) {
   highlightCurrent();
   selectClip(defaultClipIndex(clips));
   frame();
+  updatePlayReadiness();
   status(`Showing ${asset.name}`);
 }
 
@@ -240,6 +267,8 @@ function freshUrl(url) {
 }
 
 async function openAsset(asset) {
+  playMode.exit();
+  modelLoading = true; updatePlayReadiness();
   const ticket = ++loadId;
   current = asset;
   highlightCurrent();
@@ -358,6 +387,8 @@ function importFiles(files) {
 }
 
 function startNewCreation() {
+  playMode.exit();
+  modelLoading = false;
   ++loadId;
   if (root) { showOriginal(); mixer?.stopAllAction(); if (mixer) mixer.uncacheRoot(root); scene.remove(root); disposeObject(root); }
   root = undefined; mixer = undefined; action = undefined; clips = []; clipIndex = 0; current = null;
@@ -381,6 +412,7 @@ function startNewCreation() {
   camera.position.set(5, 4, 7); orbit.target.set(0, 0, 0); camera.near = .01; camera.far = 10000; camera.updateProjectionMatrix(); orbit.update();
   grid.position.y = 0; grid.scale.setScalar(1);
   status('Blank scene ready. Ask Work to build it, and it will appear here.');
+  updatePlayReadiness();
 }
 
 function download(blob, name) {
@@ -431,9 +463,12 @@ function syncLightingControls() {
   $('light-turn').value = turn; $('turn-value').textContent = `${turn}°`;
 }
 async function useLighting(id) {
+  playMode.exit();
+  lightingPending=true; updatePlayReadiness();
   const preset = lighting.use(id);
   syncLightingControls();
   await preset;
+  lightingPending=false; updatePlayReadiness();
   syncLightingControls();
 }
 $('light-preset').replaceChildren(...LIGHTING_PRESETS.map(preset => new Option(preset.name, preset.id)));
@@ -492,6 +527,7 @@ $('export').onclick = async () => {
 };
 
 window.addEventListener('keydown', event => {
+  if (playMode.active) return;
   if (/INPUT|SELECT|TEXTAREA/.test(event.target.tagName) || event.metaKey || event.ctrlKey || event.altKey) return;
   if (event.code === 'Space' && event.target.tagName !== 'BUTTON') {
     if (action) { event.preventDefault(); $('play').click(); }
@@ -515,20 +551,36 @@ new ResizeObserver(() => {
 }).observe(viewport);
 
 const timer = new THREE.Timer();
-renderer.setAnimationLoop(() => {
-  timer.update();
-  const delta = Math.min(timer.getDelta(), .1);
-  if (mixer && playing) mixer.update(delta * Number($('speed').value));
-  orbit.update();
-  renderer.render(scene, camera);
+function tick(delta, render = true) {
+  if (playMode.active) playMode.update(delta);
+  else {
+    if (mixer && playing) mixer.update(delta * Number($('speed').value));
+    orbit.update();
+  }
+  if (render) renderer.render(scene, camera);
+  if (playMode.active) return;
   const duration = action?.getClip().duration || 0, time = action?.time || 0;
   $('timeline').value = duration ? time / duration : 0;
   $('time').textContent = `${time.toFixed(2)} / ${duration.toFixed(2)} s`;
+}
+let manualUntil = 0;
+renderer.setAnimationLoop(() => {
+  timer.update();
+  const delta = Math.min(timer.getDelta(), .1);
+  if (performance.now() >= manualUntil) tick(delta);
 });
+window.render_game_to_text = () => JSON.stringify({ ...playMode.describe(), model:current?.name, ready:root ? readiness(current?.playProfile,clips,root) : ['No model'], resources:{geometries:renderer.info.memory.geometries,textures:renderer.info.memory.textures,drawCalls:renderer.info.render.calls,triangles:renderer.info.render.triangles} });
+window.advanceTime = ms => {
+  manualUntil=performance.now()+200;
+  const steps=Math.max(1,Math.ceil(ms/(1000/60)));
+  for(let n=0;n<steps;n++)tick(ms/1000/steps,false);
+  renderer.render(scene,camera);
+};
 
 updatePlay();
 renderClips();
 renderMaterials();
+updatePlayReadiness();
 useLighting(LIGHTING_PRESETS[0].id);
 fetch(`${import.meta.env.BASE_URL}models/manifest.json`)
   .then(response => { if (!response.ok) throw Error('Manifest unavailable'); return response.json(); })
@@ -545,6 +597,7 @@ fetch(`${import.meta.env.BASE_URL}models/manifest.json`)
         kind: active ? 'active' : 'repository',
         updated: typeof entry.updated === 'string' ? entry.updated : undefined,
         sourceRepository: entry.sourceRepository,
+        playProfile: entry.playProfile,
         animationSources: Array.isArray(entry.animationSources) ? entry.animationSources.map(source => new URL(source.file, modelBase).href) : [],
       };
     });

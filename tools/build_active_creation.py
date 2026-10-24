@@ -125,7 +125,7 @@ def print_report(report: dict, baked: dict | None) -> None:
         print(f"[Blender Lab] Texture memory ~{report['texture_mb']:.1f} MB with mipmaps")
 
 
-def stamp_manifest(output: Path) -> None:
+def stamp_manifest(output: Path, play_profile=None) -> None:
     """Record the build time on the shelf entry so Blender Lab lists the active creation as newest."""
     manifest = output.parent / "manifest.json"
     if not manifest.is_file():
@@ -135,6 +135,11 @@ def stamp_manifest(output: Path) -> None:
     for entry in entries:
         if entry.get("file") == output.name:
             entry["updated"] = stamp
+            # The newly exported source, never a stale former creation, owns readiness.
+            entry.pop("animationSources", None)
+            entry.pop("playProfile", None)
+            if play_profile:
+                entry["playProfile"] = play_profile
     manifest.write_text(json.dumps(entries, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
@@ -150,6 +155,8 @@ def build(source: Path, output: Path, keep_textures: Path | None = None) -> tupl
     from tools import lab_materials
     bpy.ops.wm.read_factory_settings(use_empty=True)
     runpy.run_path(str(source), run_name="__main__")
+    from tools.play_validation import declared_profile, validate as validate_play
+    play_profile = declared_profile(bpy.context.scene)
     texture_dir = Path(tempfile.mkdtemp(prefix=".lab-textures-", dir=output.parent))
     settings = lab_materials._settings()
 
@@ -174,6 +181,8 @@ def build(source: Path, output: Path, keep_textures: Path | None = None) -> tupl
         report = asset_report(document, binary)
         print_report(report, baked)
         check_budget(report, settings)
+        if play_profile:
+            validate_play(document, play_profile, binary)
 
         # Verify Blender itself can read the generated GLB before publishing it.
         bpy.ops.wm.read_factory_settings(use_empty=True)
@@ -186,7 +195,7 @@ def build(source: Path, output: Path, keep_textures: Path | None = None) -> tupl
             raise RuntimeError("GLB contains nodes but Blender imported no scene objects")
         temp_path.chmod(0o644)
         os.replace(temp_path, output)
-        stamp_manifest(output)
+        stamp_manifest(output, play_profile)
         return objects, meshes
     finally:
         temp_path.unlink(missing_ok=True)

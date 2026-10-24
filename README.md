@@ -1,5 +1,7 @@
 # Blender Lab
 
+**Play Mode:** choose Griffon V2 or Red Dragon, then click **Enter Play Mode** for a black starfield playground with animated locomotion and third-person controls. Escape restores the inspection viewer. See [controls, animation authoring, capability profiles and export validation](docs/play-mode.md).
+
 A browser-based canvas for inspecting Blender creations. Blender Lab preserves the model shelf, animation controls, and review tools while the active creation is built with Blender Python in Work.
 
 ## Start Blender Lab on Windows

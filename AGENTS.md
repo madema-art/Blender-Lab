@@ -17,3 +17,10 @@ This repository is a simple browser canvas for real Blender creations. Preserve 
 - Preserve clips, materials, rigs, and original scale when importing. Viewer transforms use a parent wrapper.
 - Opening local files must not upload them. Exporting downloads a new artifact.
 - Do not modify any other repository.
+
+## Controllable creatures
+
+- New animated creatures must be designed for Play Mode from the beginning. Set `bpy.context.scene['lab_controllable'] = True` and `lab_play_profile` to a JSON capability profile (schema and anatomy requirements in `docs/play-mode.md`). The builder must reject missing real clips before replacing the active GLB.
+- Use rig-specific templates, never invent animation names or map incompatible anatomy to a generic gait. `tools/play_authoring.py` supports only the current Griffon V2 and Red Dragon rigs. Unsupported rigs need new authored templates and visual QA.
+- Preserve source rigs and original GLBs. Locomotion must have keyed skeletal motion, clean loops, in-place strides matched to controller speed, stable roots, and tested takeoff/landing poses. Preserve Dragon membrane helper bones and Griffon feather transforms.
+- Validate animation sidecars against their original skeletons. Run `npm test`, the Blender readiness validator, and browser play checks; inspect exported poses in actual playback. Never claim physical gamepad testing when only simulated input is available.

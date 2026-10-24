@@ -83,6 +83,7 @@ def surface(name, recipe, color, **params):
     if recipe not in ATLAS_RECIPES + CARD_RECIPES:
         raise ValueError(f"unknown recipe '{recipe}'; choose from {ATLAS_RECIPES + CARD_RECIPES}")
     mat = bpy.data.materials.new(name=name)
+    mat.use_nodes = True  # Blender 4.5 LTS; Blender 5 enables this by default.
     mat["lab_recipe"] = recipe
     mat["lab_params"] = json.dumps({"color": list(color), **{k: list(v) if isinstance(v, tuple) else v for k, v in params.items()}})
     # A flat preview so the scene reads correctly in Blender before finalize() bakes it.

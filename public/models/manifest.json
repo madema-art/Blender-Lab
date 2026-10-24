@@ -2,7 +2,53 @@
   {
     "name": "Active Creation",
     "file": "active-creation.glb",
-    "updated": "2026-10-24T13:28:51+00:00"
+    "updated": "2026-10-24T13:28:51+00:00",
+    "playProfile": {
+      "version": 1,
+      "category": "quadruped",
+      "flight": true,
+      "jump": false,
+      "swimming": false,
+      "scale": 1,
+      "forwardYaw": 3.141592653589793,
+      "animations": {
+        "idle": "Play Idle",
+        "walk": "Play Walk",
+        "run": "Play Run",
+        "turnLeft": "Play Turn Left",
+        "turnRight": "Play Turn Right",
+        "takeoff": "Play Takeoff",
+        "flight": "Play Flight",
+        "glide": "Play Glide",
+        "bankLeft": "Play Bank Left",
+        "bankRight": "Play Bank Right",
+        "land": "Play Land"
+      },
+      "specials": {
+        "roar": "Roar"
+      },
+      "motion": {
+        "walk": 0.6127450980392156,
+        "run": 2.4181547619047614,
+        "fly": 5,
+        "acceleration": 2.8,
+        "turnRate": 1.8,
+        "climb": 2.2,
+        "descend": 2,
+        "takeoffHeight": 3
+      },
+      "camera": {
+        "size": 2.1,
+        "height": 1.8,
+        "distance": 14
+      },
+      "blend": 0.28
+    },
+    "animationSources": [
+      {
+        "file": "red-dragon-play-animations.glb"
+      }
+    ]
   },
   {
     "name": "Alien Flying Saucer",
@@ -281,12 +327,102 @@
     "name": "Griffon V2",
     "file": "griffon-v2.glb",
     "updated": "2026-10-23T23:14:11+00:00",
-    "creationSource": "creations/griffon-v2/scene.py"
+    "creationSource": "creations/griffon-v2/scene.py",
+    "playProfile": {
+      "version": 1,
+      "category": "quadruped",
+      "flight": true,
+      "jump": false,
+      "swimming": false,
+      "scale": 1,
+      "forwardYaw": 3.141592653589793,
+      "animations": {
+        "idle": "Play Idle",
+        "walk": "Play Walk",
+        "run": "Play Run",
+        "turnLeft": "Play Turn Left",
+        "turnRight": "Play Turn Right",
+        "takeoff": "Play Takeoff",
+        "flight": "Play Flight",
+        "glide": "Play Glide",
+        "bankLeft": "Play Bank Left",
+        "bankRight": "Play Bank Right",
+        "land": "Play Land"
+      },
+      "specials": {},
+      "motion": {
+        "walk": 0.7051282051282052,
+        "run": 2.2946859903381642,
+        "fly": 6,
+        "acceleration": 5,
+        "turnRate": 2.8,
+        "climb": 2.2,
+        "descend": 2,
+        "takeoffHeight": 2.5
+      },
+      "camera": {
+        "size": 1.5,
+        "height": 1.25,
+        "distance": 8
+      },
+      "blend": 0.2
+    },
+    "animationSources": [
+      {
+        "file": "griffon-v2-play-animations.glb"
+      }
+    ]
   },
   {
     "name": "Red Dragon",
     "file": "red-dragon.glb",
     "updated": "2026-10-24T13:28:51+00:00",
-    "creationSource": "creations/red-dragon/scene.py"
+    "creationSource": "creations/red-dragon/scene.py",
+    "playProfile": {
+      "version": 1,
+      "category": "quadruped",
+      "flight": true,
+      "jump": false,
+      "swimming": false,
+      "scale": 1,
+      "forwardYaw": 3.141592653589793,
+      "animations": {
+        "idle": "Play Idle",
+        "walk": "Play Walk",
+        "run": "Play Run",
+        "turnLeft": "Play Turn Left",
+        "turnRight": "Play Turn Right",
+        "takeoff": "Play Takeoff",
+        "flight": "Play Flight",
+        "glide": "Play Glide",
+        "bankLeft": "Play Bank Left",
+        "bankRight": "Play Bank Right",
+        "land": "Play Land"
+      },
+      "specials": {
+        "roar": "Roar"
+      },
+      "motion": {
+        "walk": 0.6127450980392156,
+        "run": 2.4181547619047614,
+        "fly": 5,
+        "acceleration": 2.8,
+        "turnRate": 1.8,
+        "climb": 2.2,
+        "descend": 2,
+        "takeoffHeight": 3
+      },
+      "camera": {
+        "size": 2.1,
+        "height": 1.8,
+        "distance": 14
+      },
+      "blend": 0.28
+    },
+    "animationSources": [
+      {
+        "file": "red-dragon-play-animations.glb"
+      }
+    ]
   }
 ]
