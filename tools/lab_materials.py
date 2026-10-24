@@ -41,8 +41,10 @@ import numpy as np
 DEFAULTS = {
     "name": "Creation",
     "atlas_size": 1024,       # body atlas base colour
-    "atlas_data_size": None,  # body atlas ORM and normal maps; None matches atlas_size
-    "card_size": 1024,        # feather card atlas
+    "atlas_data_size": None,  # body atlas normal map; None matches atlas_size
+    "atlas_orm_size": None,   # body atlas ORM map; None matches atlas_data_size
+    "card_size": 1024,        # feather and membrane card base colour
+    "card_data_size": None,   # card normal and ORM maps; None matches card_size
     "eye_size": 512,
     "ao_distance": 0.35,      # metres; how far baked ambient occlusion looks
     "ao_samples": 48,
@@ -54,8 +56,8 @@ DEFAULTS = {
     "jpeg_quality": 90,
 }
 
-ATLAS_RECIPES = ("plain", "fur", "plumage", "skin", "scales", "keratin", "leather", "metal", "wood", "stone", "blend")
-CARD_RECIPES = ("feather", "eye")
+ATLAS_RECIPES = ("plain", "fur", "plumage", "skin", "scales", "dragon", "keratin", "leather", "metal", "wood", "stone", "blend")
+CARD_RECIPES = ("feather", "membrane", "eye")
 
 
 # ---------------------------------------------------------------- public API
@@ -323,6 +325,13 @@ class Graph:
         self.put(node.inputs[0], self.position)
         return node.outputs["XYZ".index(name.upper())]
 
+    def body(self):
+        """(x, y, z) outputs of the "Body" vector attribute a creation stores on its meshes."""
+        attribute = self.new("ShaderNodeAttribute", attribute_name="Body", attribute_type="GEOMETRY")
+        split = self.new("ShaderNodeSeparateXYZ")
+        self.put(split.inputs[0], attribute.outputs["Vector"])
+        return split.outputs[0], split.outputs[1], split.outputs[2]
+
     def distance_to(self, point):
         node = self.new("ShaderNodeVectorMath", operation="DISTANCE")
         self.put(node.inputs[0], self.position)
@@ -418,6 +427,78 @@ def _recipe_scales(g, p):
                 rough=g.lin(crease, 0.32, p.get("roughness", 0.42)), metal=0.0, occl=g.lin(crease, -0.5, 1.0))
 
 
+def _recipe_dragon(g, p):
+    """Dragon hide: a hierarchy of overlapping scales driven by the mesh's "Body" attribute - x is
+    metres along the spine, y is the angle around it from 0 on top to 1 underneath (store it unsigned:
+    a signed -1..1 value interpolates through 0 across the belly seam), z is a local scale
+    size factor (1 on the body, lower at joints, limbs and face). Large armoured scales along the
+    back, imbricate flank scales that shrink with z, and transverse belly plates underneath.
+    Colours: color (crimson), color2 (scarlet highlights), color3 (burgundy creases), soot (dorsal
+    ridges), belly (plates) and ember (a band where flank meets belly)."""
+    arc, around, size = g.body()
+    side = g.math("ABSOLUTE", around)
+    belly = g.smooth(side, p.get("belly_start", 0.62), p.get("belly_end", 0.74))
+    dorsal = g.smooth(side, p.get("dorsal_width", 0.3), 0.05)
+    size = g.math("MAXIMUM", size, 0.2)
+    density = g.math("DIVIDE", 1.0 / p.get("scale", 0.05), size)
+    coords = g.new("ShaderNodeVectorMath", operation="SCALE")
+    g.put(coords.inputs[0], g.position)
+    g.put(coords.inputs["Scale"], density)
+    coords = coords.outputs[0]
+
+    def scale_layer(vec, randomness):
+        cells = g.voronoi(vec, feature="F1", randomness=randomness)
+        edge = g.voronoi(vec, feature="DISTANCE_TO_EDGE", randomness=randomness).outputs["Distance"]
+        offset = g.new("ShaderNodeVectorMath", operation="SUBTRACT")
+        g.put(offset.inputs[0], cells.outputs["Position"])
+        g.put(offset.inputs[1], vec)
+        lean = g.new("ShaderNodeSeparateXYZ")
+        g.put(lean.inputs[0], offset.outputs[0])
+        tone = g.new("ShaderNodeSeparateColor")
+        g.put(tone.inputs[0], cells.outputs["Color"])
+        # Scales overlap towards the tail: the leading edge of each one sits higher.
+        imbricate = g.smooth(lean.outputs[1], -0.55, 0.55)
+        return g.smooth(edge, 0.085, 0.0), g.smooth(edge, 0.0, 0.34), imbricate, tone.outputs[0]
+
+    big = g.new("ShaderNodeVectorMath", operation="SCALE")
+    g.put(big.inputs[0], coords)
+    big.inputs["Scale"].default_value = 0.5
+    crease_f, dome_f, lean_f, tone_f = scale_layer(coords, 0.9)
+    crease_d, dome_d, lean_d, tone_d = scale_layer(big.outputs[0], 0.75)
+
+    plate_len = g.mul(size, p.get("plate", 0.12))
+    phase = g.math("DIVIDE", arc, plate_len)
+    frac = g.math("FRACT", phase)
+    plate_crease = g.add(g.smooth(frac, 0.1, 0.0), g.smooth(frac, 0.9, 1.0))
+    plate_dome = g.math("SINE", g.mul(frac, math.pi))
+    plate_tone = g.noise(g.math("FLOOR", phase), scale=3.1, detail=1)
+
+    def lerp(a, b, m):
+        return g.add(a, g.mul(g.math("SUBTRACT", b, a), m))
+
+    crease = lerp(lerp(crease_f, crease_d, dorsal), plate_crease, belly)
+    dome = lerp(lerp(dome_f, dome_d, dorsal), plate_dome, belly)
+    lean = lerp(lerp(lean_f, lean_d, dorsal), g.mul(frac, 0.0), belly)
+    cell = lerp(tone_f, tone_d, dorsal)
+    micro = g.noise(coords, scale=7.0, detail=3)
+    broad = g.noise(g.coords(p.get("mottle_scale", 0.9)), detail=3, roughness=0.5)
+
+    colour = g.mix(g.smooth(cell, 0.2, 0.9), p["color"], p.get("color2", p["color"]))
+    colour = g.mix(g.mul(dome, 0.35), colour, p.get("color2", p["color"]))
+    colour = g.mix(crease, colour, p.get("color3", [c * 0.4 for c in p["color"]]))
+    colour = g.mix(g.mul(dorsal, g.lin(crease_d, 0.35, 0.55)), colour, p.get("soot", [c * 0.2 for c in p["color"]]))
+    band = g.mul(g.smooth(side, 0.42, 0.56), g.smooth(side, 0.74, 0.6))
+    colour = g.mix(g.mul(band, p.get("ember_amount", 0.55)), colour, p.get("ember", p["color"]))
+    plate_colour = g.mix(g.lin(plate_tone, 0.3, 0.0), p.get("belly", p["color"]), [c * 0.85 for c in p.get("belly", p["color"])])
+    plate_colour = g.mix(plate_crease, plate_colour, [c * 0.5 for c in p.get("belly", p["color"])])
+    colour = g.mix(belly, colour, plate_colour)
+    colour = g.mix(g.mul(g.smooth(broad, 0.42, 0.72), p.get("mottle", 0.3)), colour, g.shade(colour, 0.68))
+    return dict(base=colour, tone=g.add(g.lin(micro, 0.2, 0.4), g.mul(lean, 0.12)),
+                height=g.add(g.mul(dome, 0.7), g.mul(crease, -0.45), g.mul(lean, 0.35), g.mul(micro, 0.08)),
+                rough=g.add(g.lin(crease, 0.28, p.get("roughness", 0.42)), g.mul(dorsal, 0.1), g.mul(belly, 0.06)),
+                metal=0.0, occl=g.lin(crease, -0.55, 1.0))
+
+
 def _recipe_keratin(g, p):
     """Beaks, claws, talons and horns: glossy, with growth striations along `grain` and an optional
     darker `tip` point (x, y, z) fading out over `tip_radius` into `tip_color`."""
@@ -430,6 +511,11 @@ def _recipe_keratin(g, p):
     if "root" in p:
         fade = g.smooth(g.distance_to(p["root"]), p.get("root_radius", 0.08), 0.0)
         base = g.mix(fade, base, p.get("root_color", p["color"]))
+    if p.get("along"):
+        # Per-piece gradient from the "Body" attribute's x (0 at the root, 1 at the tip).
+        t = g.body()[0]
+        base = g.mix(g.smooth(t, p.get("tip_start", 0.55), 1.0), base, p.get("tip_color", [c * 0.25 for c in p["color"]]))
+        base = g.mix(g.smooth(t, p.get("root_end", 0.25), 0.0), base, p.get("root_color", p["color"]))
     return dict(base=base, tone=g.lin(streak, p.get("variation", 0.5), 0.5 - p.get("variation", 0.5) / 2),
                 height=g.mul(streak, 0.4), rough=g.lin(streak, 0.12, p.get("roughness", 0.28) - 0.06),
                 metal=p.get("metallic", 0.0), occl=None)
@@ -651,10 +737,12 @@ def _bake_atlas(objects, settings, workdir, report):
     ao = np.clip(px["ao"][..., 0] * 0.8 + 0.2, 0, 1) * np.clip(px["occl"][..., 0], 0, 1)
     orm = np.stack([ao, np.clip(px["rough"][..., 0], 0.04, 1), np.clip(px["metal"][..., 0], 0, 1)], axis=-1)
     data_size = settings["atlas_data_size"] or size
+    orm_size = settings["atlas_orm_size"] or data_size
     normal = px["normal"][..., :3]
+    if orm_size < size:
+        orm = _downsample(orm, size // orm_size)
     if data_size < size:
-        orm, normal = _downsample(orm, size // data_size), _downsample(normal, size // data_size)
-        normal = normal * 2 - 1
+        normal = _downsample(normal, size // data_size) * 2 - 1
         normal = normal / np.maximum(np.linalg.norm(normal, axis=-1, keepdims=True), 1e-6) * 0.5 + 0.5
     orm = _write(f"{name} atlas ORM", orm, workdir / "atlas_orm.png", "PNG", "Non-Color", settings)
     normal = _write(f"{name} atlas normal", np.clip(normal, 0, 1), workdir / "atlas_normal.png", "PNG", "Non-Color", settings)
@@ -777,10 +865,45 @@ def feather_card(size, rows=4, seed=11):
                 normal=_normal_from_height(height, 1.3))
 
 
-def eye_card(size, iris, outer, pupil=0.1, iris_radius=0.3, seed=5):
+def membrane_card(size, seed=23):
+    """Neutral wing-membrane texture: u runs from the membrane's root to its trailing edge and v
+    across the panel between two finger bones. Branching veins, a capillary web, thicker margins
+    along the bones, a darker trailing rim and fine tension wrinkles."""
+    u = np.broadcast_to((np.arange(size) + 0.5) / size, (size, size))
+    v = np.broadcast_to(((np.arange(size) + 0.5) / size)[:, None], (size, size))
+    wobble = _fbm(size, size, 6, 3, seed, 3) - 0.5
+    veins = np.zeros((size, size))
+    for k, centre in enumerate((0.17, 0.36, 0.55, 0.74, 0.88)):
+        path = centre + 0.05 * np.sin(u * (3 + k) + k) + 0.06 * wobble
+        width = 0.006 + 0.007 * (1 - u)
+        veins = np.maximum(veins, _smoothstep(width, width * 0.25, np.abs(v - path)))
+        # Side branches angling out towards the trailing edge.
+        for b in range(3):
+            start = 0.2 + 0.25 * b + 0.05 * k
+            branch = path + (u - start) * (0.5 if (k + b) % 2 else -0.5)
+            reach = _smoothstep(start - 0.01, start + 0.02, u) * _smoothstep(start + 0.32, start + 0.18, u)
+            veins = np.maximum(veins, 0.7 * reach * _smoothstep(0.0045, 0.001, np.abs(v - branch)))
+    web = 1 - np.abs(2 * _fbm(size, size, 18, 10, seed + 3, 4) - 1)
+    capillary = _smoothstep(0.86, 0.96, web)
+    margin = _smoothstep(0.1, 0.0, v) + _smoothstep(0.9, 1.0, v)
+    rim = _smoothstep(0.93, 1.0, u)
+    wrinkle = 0.5 + 0.5 * np.sin(2 * np.pi * (v * 46 + 3 * wobble))
+    broad = _fbm(size, size, 3, 3, seed + 7, 3) - 0.5
+    tone = 0.9 + 0.12 * broad - 0.3 * veins - 0.1 * capillary - 0.2 * margin - 0.15 * rim
+    color = np.clip(tone[..., None] * np.array([1.0, 0.95, 0.92]), 0, 1)
+    height = 0.6 * veins + 0.25 * capillary + 0.12 * wrinkle + 0.3 * margin
+    return dict(color=color, rough=np.clip(0.55 + 0.1 * veins + 0.08 * margin, 0, 1), metal=np.zeros_like(tone),
+                occl=np.clip(1 - 0.2 * veins - 0.15 * margin, 0, 1), normal=_normal_from_height(height, 1.2))
+
+
+CARD_TEXTURES = {"feather": feather_card, "membrane": membrane_card}
+
+
+def eye_card(size, iris, outer, pupil=0.1, iris_radius=0.3, seed=5, slit=1.0):
     """Iris texture for an ellipsoid whose +Z pole is the gaze: v=1 is the pupil centre and u wraps
     around it. A gold-to-bronze gradient, fine radial fibres, a wavy collarette, darker crypts,
-    sparse flecks, a soft limbal ring and a slightly irregular pupil."""
+    sparse flecks, a soft limbal ring and a slightly irregular pupil. `slit` below 1 narrows the
+    pupil across u = 0.25/0.75 into a vertical slit, so u = 0 must point up the eye."""
     v = (np.arange(size) + 0.5) / size
     r = np.broadcast_to((1 - v)[:, None], (size, size))
     angle = np.broadcast_to(((np.arange(size) + 0.5) / size * 2 * np.pi)[None, :], (size, size))
@@ -789,7 +912,9 @@ def eye_card(size, iris, outer, pupil=0.1, iris_radius=0.3, seed=5):
     crypts = _fbm(size, size, 12, 40, seed + 4, 2, wrap_x=True)
     flecks = _fbm(size, size, 40, 160, seed + 6, 1, wrap_x=True)
     iris, outer = np.array(iris), np.array(outer)
-    edge = pupil + 0.006 * np.sin(angle * 5 + 1.3) + 0.004 * (coarse - 0.5)
+    a, b = pupil, pupil * slit
+    shape = a * b / np.sqrt((b * np.cos(angle)) ** 2 + (a * np.sin(angle)) ** 2)
+    edge = shape + 0.006 * np.sin(angle * 5 + 1.3) + 0.004 * (coarse - 0.5)
     radial = np.clip((r - edge) / (iris_radius - edge), 0, 1)
     inner_color, outer_color = np.clip(iris * 1.3 + 0.05, 0, 1), iris * 0.55
     color = inner_color[None, None, :] + (outer_color - inner_color)[None, None, :] * _smoothstep(0.1, 0.95, radial)[..., None]
@@ -800,7 +925,7 @@ def eye_card(size, iris, outer, pupil=0.1, iris_radius=0.3, seed=5):
     light = light - 0.35 * _smoothstep(0.8, 0.86, flecks)
     color = color * light[..., None] * (1 - 0.7 * _smoothstep(0.78, 1.0, radial))[..., None]
     color = np.where((r > iris_radius)[..., None], outer[None, None, :] * (0.75 + 0.35 * coarse[..., None]), color)
-    hole = _smoothstep(edge + 0.008, edge - 0.008, r)[..., None]
+    hole = _smoothstep(edge + 0.006, edge - 0.006, r)[..., None]
     color = color * (1 - hole) + 0.003 * hole
     return dict(color=np.clip(color, 0, 1))
 
@@ -809,30 +934,36 @@ def eye_card(size, iris, outer, pupil=0.1, iris_radius=0.3, seed=5):
 
 def _finish_cards(objects, settings, workdir, report):
     replacements = {}
-    feathers = [o for o in objects if _recipe(o) == "feather"]
     eyes = [o for o in objects if _recipe(o) == "eye"]
     for obj in objects:
         if not obj.data.uv_layers:
             _unwrap([obj], settings["card_size"])
 
-    if feathers:
+    for kind, generate in CARD_TEXTURES.items():
+        cards = [o for o in objects if _recipe(o) == kind]
+        if not cards:
+            continue
         size = settings["card_size"]
-        card = feather_card(size)
+        data = settings["card_data_size"] or size
+        card = generate(size)
+        orm, normal = np.stack([card["occl"], card["rough"], card["metal"]], -1), card["normal"]
+        if data < size:
+            orm, normal = _downsample(orm, size // data), _downsample(normal, size // data)
         name = settings["name"]
-        color = _write(f"{name} feather color", _to_srgb(card["color"]), workdir / "feather_color.jpg", "JPEG", "sRGB", settings)
-        orm = _write(f"{name} feather ORM", np.stack([card["occl"], card["rough"], card["metal"]], -1), workdir / "feather_orm.png", "PNG", "Non-Color", settings)
-        normal = _write(f"{name} feather normal", card["normal"], workdir / "feather_normal.png", "PNG", "Non-Color", settings)
-        for image, role in ((color, "feather base colour"), (orm, "feather ORM"), (normal, "feather normal")):
+        color = _write(f"{name} {kind} color", _to_srgb(card["color"]), workdir / f"{kind}_color.jpg", "JPEG", "sRGB", settings)
+        orm = _write(f"{name} {kind} ORM", orm, workdir / f"{kind}_orm.png", "PNG", "Non-Color", settings)
+        normal = _write(f"{name} {kind} normal", normal, workdir / f"{kind}_normal.png", "PNG", "Non-Color", settings)
+        for image, role in ((color, f"{kind} base colour"), (orm, f"{kind} ORM"), (normal, f"{kind} normal")):
             report["textures"].append(_texture_entry(image, role))
-        shared = _pbr_material(f"{name} feathers", color, orm, normal, vertex_color=True, double_sided=True)
-        _bake_vertex_tint(feathers, settings)
-        for obj in feathers:
+        shared = _pbr_material(f"{name} {kind}s", color, orm, normal, vertex_color=True, double_sided=True)
+        _bake_vertex_tint(cards, settings)
+        for obj in cards:
             replacements[obj.material_slots[0].material] = shared
 
     for mat in {o.material_slots[0].material for o in eyes}:
         p = _params(mat)
         card = eye_card(settings["eye_size"], p["color"], p.get("color2", [c * 0.35 for c in p["color"]]),
-                        p.get("pupil", 0.1), p.get("iris_radius", 0.3))
+                        p.get("pupil", 0.1), p.get("iris_radius", 0.3), slit=p.get("slit", 1.0))
         color = _write(f"{mat.name} iris", _to_srgb(card["color"]), workdir / f"eye_{len(replacements)}.png", "PNG", "sRGB", settings)
         report["textures"].append(_texture_entry(color, "eye base colour"))
         replacements[mat] = _pbr_material(mat.name, color, None, None, roughness=p.get("roughness", 0.06),

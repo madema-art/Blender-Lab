@@ -1,36 +1,42 @@
-"""Griffon V2: an eagle-headed, lion-bodied griffon built as one skinned game character.
+"""Red Dragon: an ancient Western dragon - four legs, two great bat-wings - built as one skinned
+game character for Blender Lab.
 
-Blender is Z-up and the griffon faces -Y; the glTF exporter converts to Y-up. Units are metres.
+Blender is Z-up and the dragon faces -Y; the glTF exporter converts to Y-up. Units are metres:
+about 8.6 m from snout to tail tip, 2 m at the shoulder, a 10 m wingspan.
 
-What changed from V1:
-- One armature deforms everything by skin weights: a spine, a three-bone neck, a five-bone tail,
-  leg chains, eyelids, a jaw, three-bone wings and one bone per flight feather, so wings fold the
-  way a bird's do and bodies bend smoothly instead of hinging between rigid parts.
-- The trunk is one sculpted surface (shoulders, ribcage, tucked belly, haunches, hamstrings) whose
-  hide crossfades from plumage to lion fur; feathers thin out into wisps over that transition.
-- The head is sculpted around a brow shelf, eye sockets and cheeks, with a hooked, D-section beak,
-  cere and nostrils, eyelids, and a detailed iris.
-- Feathers are scattered irregularly along a flow field from the beak instead of in rows, and the
-  wings are rebuilt as primaries (notched "fingers"), secondaries, tertials, greater, median,
-  lesser and marginal coverts, an alula and scapulars, each tinted and varied per feather.
+Construction:
+- One trunk surface runs from the back of the skull to the tail tip with all four legs, built from
+  a skin-modifier skeleton and sculpted with muscle stamps (pectorals, the wing muscles over the
+  shoulders, ribcage, flanks, glutes, quadriceps, hamstrings, calves, tail base).
+- The skull and lower jaw are separate sculpted meshes with heavy brows, deep sockets, cheekbones
+  and nostril mounds; individual teeth, a tongue, palate and throat sit inside the hinged mouth.
+- Horns, cheek and jaw spikes, a cranial crest and dorsal spines are keratin pieces placed on the
+  surfaces they grow from.
+- Each wing is an arm, a thumb claw and four three-jointed fingers; the membrane is a set of
+  Coons-patch panels between the fingers, the arm and the flank, skinned so it gathers when the
+  fingers close.
+- Scales are textures: a "Body" attribute (distance along the spine, angle around it, scale size)
+  drives armoured dorsal scales, overlapping flank scales, small joint scales and belly plates.
 
-Three clips share the rig: Idle (wings raised), Wing beat, and Perched (wings folded).
+Animation: forward kinematics from bone deltas plus analytic two-bone IK that keeps the feet planted
+while the body crouches, bobs and rears. Clips: Idle, Perched, Wing beat, Roar and Flight.
 """
 
 import math
+import numpy
 import random
 
 import bpy
-from mathutils import Matrix, Vector, noise
+from mathutils import Matrix, Quaternion, Vector
+from mathutils.bvhtree import BVHTree
 
 from tools import lab_materials as lab
 from tools import lab_shapes as shapes
-from tools.lab_shapes import (CONTOUR, EMARGINATED, HACKLE, PRIMARY, SECONDARY, SMALL, WISP, ellipsoid, eyelid,
-                              feather, frame, loft)
+from tools.lab_shapes import ellipsoid, eyelid, loft
 
-lab.configure(name="Griffon V2", atlas_size=2048, atlas_data_size=1024, card_size=1024, ao_distance=0.3,
-              card_ao_strength=0.35)
-rng = random.Random(7)
+lab.configure(name="Red Dragon", atlas_size=2048, atlas_data_size=2048, atlas_orm_size=1024, card_size=1024,
+              card_data_size=512, eye_size=512, ao_distance=0.6, card_ao_distance=0.2, card_ao_strength=0.3)
+rng = random.Random(11)
 
 
 def jitter(amount):
@@ -46,609 +52,663 @@ def lerp(a, b, t):
     return tuple(x + (y - x) * t for x, y in zip(a, b))
 
 
-# ---------------------------------------------------------------- materials
+# ---------------------------------------------------------------- palette and materials (linear RGB)
 
-FUR = (0.44, 0.25, 0.085)
-fur_params = dict(color=FUR, color2=(0.58, 0.4, 0.2), color3=(0.28, 0.15, 0.05), belly=(0.5, 0.86),
-                  dorsal=(1.18, 1.42), legs=(0.45, 0.8), flow="y", leg_flow="z", mottle=0.22,
-                  scale=0.04, roughness=0.84, bump=0.7, contrast=0.42)
-hide = lab.surface("Griffon hide", "blend", (0.62, 0.44, 0.2),
-                   a=("plumage", dict(color=(0.56, 0.39, 0.17), scale=0.02, variation=0.3, bump=0.45, roughness=0.62)),
-                   b=("fur", fur_params), axis="y", start=-0.24, end=0.0, noise=0.08, noise_scale=0.1)
-paws = lab.surface("Lion paws", "fur", FUR, **{k: v for k, v in fur_params.items() if k not in ("color", "dorsal")})
-tuft_fur = lab.surface("Dark tail tuft", "fur", (0.07, 0.045, 0.025), flow="z", scale=0.02, roughness=0.9, texel=0.6)
-face = lab.surface("Face plumage", "plumage", (0.9, 0.82, 0.62), scale=0.009, variation=0.22, bump=0.35, texel=2.6)
-wing_flesh = lab.surface("Wing leading edge", "plumage", (0.66, 0.46, 0.18), scale=0.015, texel=0.35)
-beak = lab.surface("Beak", "keratin", (0.84, 0.6, 0.17), tip=(0, -1.205, 1.875), tip_radius=0.13,
-                   tip_color=(0.12, 0.09, 0.06), root=(0, -0.96, 2.02), root_radius=0.08, root_color=(0.95, 0.78, 0.36),
-                   grain="y", roughness=0.3, variation=0.7, contrast=0.4, bump=0.7, texel=3.0)
-cere = lab.surface("Cere and gape", "skin", (0.86, 0.63, 0.13), scale=0.004, roughness=0.5, texel=2.5)
-nostril = lab.surface("Nostrils", "skin", (0.02, 0.015, 0.012), scale=0.003, texel=0.3)
-scales = lab.surface("Leg scales", "scales", (0.8, 0.56, 0.13), scale=0.016, roughness=0.42, variation=0.35, texel=1.6)
-talon = lab.surface("Talons", "keratin", (0.03, 0.028, 0.026), grain="z", roughness=0.24, variation=0.8, texel=1.4)
-lion_claw = lab.surface("Lion claws", "keratin", (0.42, 0.37, 0.3), grain="y", roughness=0.35, texel=0.8)
-plumes = lab.surface("Griffon feathers", "feather", (0.6, 0.42, 0.18), jitter=0.07)
-iris = lab.surface("Griffon eyes", "eye", (0.95, 0.52, 0.07), color2=(0.22, 0.11, 0.03), pupil=0.105,
-                   iris_radius=0.34, glow=0.12, roughness=0.04)
+CRIMSON, SCARLET, BURGUNDY = (0.19, 0.011, 0.011), (0.34, 0.024, 0.016), (0.055, 0.004, 0.006)
+SOOT, BELLY, EMBER = (0.018, 0.007, 0.006), (0.16, 0.052, 0.03), (0.55, 0.11, 0.018)
+hide_params = dict(color2=SCARLET, color3=BURGUNDY, soot=SOOT, belly=BELLY, ember=EMBER, roughness=0.44,
+                   mottle=0.32, contrast=0.28, ember_amount=0.32)
+hide = lab.surface("Dragon hide", "dragon", CRIMSON, scale=0.075, plate=0.17, bump=0.9, **hide_params)
+face = lab.surface("Dragon face", "dragon", CRIMSON, scale=0.04, plate=0.07, bump=0.8, texel=2.4, dorsal_width=0.22,
+                   **hide_params)
+horn = lab.surface("Horn", "keratin", (0.022, 0.017, 0.015), along=True, tip_color=(0.26, 0.2, 0.15), tip_start=0.6,
+                   grain="y", scale=0.02, roughness=0.56, variation=0.7, texel=1.4)
+spine = lab.surface("Dorsal spines", "keratin", (0.07, 0.008, 0.008), along=True, tip_color=(0.02, 0.012, 0.01),
+                    tip_start=0.3, grain="z", scale=0.015, roughness=0.5, texel=0.7)
+teeth = lab.surface("Teeth", "keratin", (0.7, 0.6, 0.46), along=True, root_color=(0.3, 0.17, 0.11), root_end=0.3,
+                    tip_color=(0.8, 0.74, 0.62), grain="z", roughness=0.32, texel=1.5)
+claws = lab.surface("Claws", "keratin", (0.03, 0.022, 0.02), along=True, tip_color=(0.1, 0.085, 0.075), grain="y",
+                    roughness=0.42, variation=0.8, texel=1.2)
+mouth = lab.surface("Mouth", "skin", (0.2, 0.025, 0.03), scale=0.01, roughness=0.32, texel=0.9)
+tongue_mat = lab.surface("Tongue", "skin", (0.32, 0.05, 0.055), scale=0.008, roughness=0.3, texel=1.0)
+nostril = lab.surface("Nostrils", "skin", (0.012, 0.005, 0.005), scale=0.006, texel=0.3)
+membrane = lab.surface("Wing membrane", "membrane", (0.3, 0.03, 0.02), jitter=0.02)
+eye_mat = lab.surface("Dragon eyes", "eye", (0.95, 0.3, 0.02), color2=(0.16, 0.02, 0.004), pupil=0.14, iris_radius=0.45,
+                      slit=0.16, glow=0.45, roughness=0.04)
 
 
-# ---------------------------------------------------------------- landmarks and bones
+# ---------------------------------------------------------------- skeleton landmarks
 
-HEAD = Vector((0, -0.84, 2.06))
-BEAK_BASE = Vector((0, -0.985, 2.035))
-SHOULDER = Vector((0.27, -0.33, 1.5))   # right wing root; left mirrors
 SIDES = ((1, "R"), (-1, "L"))
 MIRROR = Matrix.Diagonal((-1, 1, 1, 1))
+FLIP = MIRROR.to_3x3()
 
-RAISE, SWEEP = 0.5, 0.18
-WS = Matrix.Translation(SHOULDER) @ Matrix.Rotation(-RAISE, 4, "Y") @ Matrix.Rotation(SWEEP, 4, "Z")
-ELBOW, WRIST, TIP = Vector((0.56, 0.2, 0.0)), Vector((1.28, -0.04, 0.04)), Vector((2.05, 0.1, 0.02))
-NORMAL = (WS.to_3x3() @ Vector((0, 0, 1))).normalized()   # right wing's upper surface at rest
+# The main chain from the nape to the tail tip: (position, side radius, up radius).
+MAIN = [((0, -2.2, 3.12), 0.24, 0.25), ((0, -2.12, 2.97), 0.27, 0.29), ((0, -1.99, 2.72), 0.31, 0.34),
+        ((0, -1.79, 2.42), 0.36, 0.4), ((0, -1.53, 2.12), 0.44, 0.5), ((0, -1.22, 1.87), 0.54, 0.62),
+        ((0, -0.86, 1.73), 0.62, 0.7), ((0, -0.42, 1.67), 0.59, 0.65), ((0, 0.03, 1.63), 0.52, 0.56),
+        ((0, 0.45, 1.66), 0.5, 0.52), ((0, 0.85, 1.72), 0.53, 0.55), ((0, 1.3, 1.66), 0.44, 0.44),
+        ((0, 1.8, 1.48), 0.34, 0.34), ((0, 2.3, 1.24), 0.235, 0.235), ((0, 2.8, 0.98), 0.185, 0.185),
+        ((0, 3.3, 0.72), 0.145, 0.145), ((0, 3.8, 0.5), 0.112, 0.112), ((0, 4.3, 0.34), 0.084, 0.084),
+        ((0, 4.75, 0.24), 0.06, 0.06), ((0, 5.15, 0.18), 0.04, 0.04), ((0, 5.45, 0.15), 0.022, 0.022)]
+NECK_END, CHEST, HIPS, TAIL_ROOT = 0, 6, 10, 11
+FRONT = [((0.42, -0.95, 1.45), 0.34, 0.38), ((0.5, -0.86, 1.2), 0.28, 0.29), ((0.55, -0.74, 0.95), 0.215, 0.22),
+         ((0.55, -0.78, 0.76), 0.18, 0.185), ((0.54, -0.9, 0.5), 0.15, 0.155), ((0.52, -1.0, 0.3), 0.12, 0.125),
+         ((0.52, -1.07, 0.16), 0.13, 0.1), ((0.52, -1.16, 0.09), 0.15, 0.07)]
+HIND = [((0.4, 0.95, 1.48), 0.44, 0.47), ((0.5, 0.78, 1.22), 0.39, 0.4), ((0.56, 0.58, 0.98), 0.3, 0.31),
+        ((0.58, 0.47, 0.84), 0.23, 0.235), ((0.58, 0.64, 0.64), 0.19, 0.195), ((0.575, 0.85, 0.46), 0.155, 0.16),
+        ((0.57, 0.98, 0.36), 0.13, 0.135), ((0.57, 0.92, 0.2), 0.11, 0.11), ((0.57, 0.83, 0.12), 0.14, 0.085),
+        ((0.57, 0.72, 0.09), 0.16, 0.07)]
 
-EYE_OFFSET = Vector((0.066, -0.118, 0.03))
-GAZE = Vector((0.76, -0.65, 0.02)).normalized()
+HEAD_POS = Vector((0, -2.3, 3.22))
+HEAD_SCALE = 1.25
+HEAD_M = Matrix.Translation(HEAD_POS) @ Matrix.Rotation(0.15, 4, "X") @ Matrix.Scale(HEAD_SCALE, 4)   # snout tilted down
+WING_ROOT = Vector((0.38, -0.9, 2.12))
+RAISE, SWEEP = 0.42, 0.1
+WS = Matrix.Translation(WING_ROOT) @ Matrix.Rotation(-RAISE, 4, "Y") @ Matrix.Rotation(SWEEP, 4, "Z")
+NORMAL = (WS.to_3x3() @ Vector((0, 0, 1))).normalized()
+ELBOW, WRIST = Vector((1.0, 0.3, 0.04)), Vector((2.45, -0.22, 0.12))
+# Fingers (digits II-V): angle from the span towards the tail, segment lengths, bend per joint.
+FINGERS = {"d2": (9, (1.45, 1.1, 0.84), 4), "d3": (31, (1.5, 1.16, 0.88), 5),
+           "d4": (56, (1.34, 1.04, 0.76), 5), "d5": (83, (1.1, 0.85, 0.6), 4)}
 
-TAIL = [Vector(p) for p in ((0, 0.84, 1.15), (0, 1.08, 1.24), (0, 1.32, 1.17), (0, 1.48, 0.98), (0, 1.58, 0.76),
-                            (0, 1.72, 0.6), (0, 1.9, 0.6), (0, 2.02, 0.7))]
 
-BONES = {}  # name -> (head, tail, parent)
+def finger_points(name):
+    angle, lengths, bend = FINGERS[name]
+    points, heading, at = [WRIST.copy()], angle, WRIST.copy()
+    for length in lengths:
+        at = at + Vector((math.cos(math.radians(heading)), math.sin(math.radians(heading)), -0.01)) * length
+        points.append(at.copy())
+        heading += bend
+    return points
+
+
+FINGER_POINTS = {name: finger_points(name) for name in FINGERS}
+
+BONES = {}
 
 
 def bone(name, head, tail, parent=None):
     BONES[name] = (Vector(head), Vector(tail), parent)
 
 
-bone("pelvis", (0, 0.55, 1.12), (0, 0.2, 1.08))
-bone("spine", (0, 0.2, 1.08), (0, -0.2, 1.12), "pelvis")
-bone("chest", (0, -0.2, 1.12), (0, -0.5, 1.3), "spine")
-bone("neck1", (0, -0.5, 1.3), (0, -0.68, 1.56), "chest")
-bone("neck2", (0, -0.68, 1.56), (0, -0.76, 1.78), "neck1")
-bone("neck3", (0, -0.76, 1.78), (0, -0.8, 1.94), "neck2")
-bone("head", (0, -0.8, 1.94), (0, -0.98, 2.08), "neck3")
-bone("jaw", (0, -0.92, 1.99), (0, -1.12, 1.96), "head")
-for i, (a, b) in enumerate(zip([TAIL[0], TAIL[2], TAIL[3], TAIL[5], TAIL[6]], [TAIL[2], TAIL[3], TAIL[5], TAIL[6], TAIL[7]])):
-    bone(f"tail{i + 1}", a, b, f"tail{i}" if i else "pelvis")
+bone("root", (0, 0, 0), (0, 0.6, 0))
+bone("pelvis", (0, 0.85, 1.72), (0, 0.4, 1.66), "root")
+bone("spine1", (0, 0.4, 1.66), (0, -0.1, 1.64), "pelvis")
+bone("spine2", (0, -0.1, 1.64), (0, -0.6, 1.68), "spine1")
+bone("chest", (0, -0.6, 1.68), (0, -1.22, 1.87), "spine2")
+neck_points = [Vector(MAIN[i][0]) for i in (5, 4, 3, 2, 1)]
+for i in range(4):
+    bone(f"neck{i + 1}", neck_points[i], neck_points[i + 1], f"neck{i}" if i else "chest")
+bone("head", neck_points[-1], HEAD_M @ Vector((0, -0.75, 0.0)), "neck4")
+bone("jaw", HEAD_M @ Vector((0, 0.08, -0.07)), HEAD_M @ Vector((0, -0.7, -0.12)), "head")
+bone("throat", (0, -1.72, 2.2), (0, -1.95, 2.55), "neck2")
+tail_points = [Vector(MAIN[i][0]) for i in range(TAIL_ROOT, len(MAIN))]
+for i in range(len(tail_points) - 1):
+    bone(f"tail{i + 1}", tail_points[i], tail_points[i + 1], f"tail{i}" if i else "pelvis")
+TAILS = [f"tail{i + 1}" for i in range(len(tail_points) - 1)]
+NECKS = ["neck1", "neck2", "neck3", "neck4"]
+EYE_LOCAL = Vector((0.172, -0.192, 0.074))
 for side, tag in SIDES:
-    m = lambda x, y, z: (x * side, y, z)
-    eye = HEAD + Vector((EYE_OFFSET.x * side, EYE_OFFSET.y, EYE_OFFSET.z))
-    bone(f"lid.{tag}", eye, eye + Vector((0, 0, 0.05)), "head")
-    bone(f"thigh.{tag}", m(0.2, 0.6, 0.98), m(0.25, 0.42, 0.62), "pelvis")
-    bone(f"shin.{tag}", m(0.25, 0.42, 0.62), m(0.25, 0.74, 0.34), f"thigh.{tag}")
-    bone(f"hfoot.{tag}", m(0.25, 0.74, 0.34), m(0.25, 0.62, 0.07), f"shin.{tag}")
-    bone(f"arm.{tag}", m(0.2, -0.42, 0.96), m(0.25, -0.5, 0.62), "chest")
-    bone(f"tarsus.{tag}", m(0.25, -0.5, 0.62), m(0.25, -0.58, 0.12), f"arm.{tag}")
-    bone(f"ffoot.{tag}", m(0.25, -0.58, 0.12), m(0.25, -0.78, 0.05), f"tarsus.{tag}")
+    m = lambda p: Vector((p[0] * side, p[1], p[2]))
+    eye = HEAD_M @ Vector((EYE_LOCAL.x * side, EYE_LOCAL.y, EYE_LOCAL.z))
+    bone(f"lid.{tag}", eye, eye + Vector((0, 0, 0.08)), "head")
+    bone(f"upperarm.{tag}", m(FRONT[0][0]), m(FRONT[2][0]), "chest")
+    bone(f"forearm.{tag}", m(FRONT[2][0]), m(FRONT[5][0]), f"upperarm.{tag}")   # hand from the wrist
+    bone(f"hand.{tag}", m(FRONT[5][0]), m((0.52, -1.3, 0.06)), f"forearm.{tag}")
+    bone(f"thigh.{tag}", m(HIND[0][0]), m(HIND[3][0]), "pelvis")
+    bone(f"shin.{tag}", m(HIND[3][0]), m(HIND[6][0]), f"thigh.{tag}")
+    bone(f"foot.{tag}", m(HIND[6][0]), m(HIND[8][0]), f"shin.{tag}")
+    bone(f"toes.{tag}", m(HIND[8][0]), m((0.57, 0.45, 0.05)), f"foot.{tag}")
 
 
 def wing_world(point, side=1):
     world = WS @ Vector(point)
-    return Vector((world.x * side, world.y, world.z))
+    return world if side > 0 else FLIP @ world
 
 
 for side, tag in SIDES:
-    bone(f"up.{tag}", wing_world((0, 0, 0), side), wing_world(ELBOW, side), "chest")
-    bone(f"fore.{tag}", wing_world(ELBOW, side), wing_world(WRIST, side), f"up.{tag}")
-    bone(f"hand.{tag}", wing_world(WRIST, side), wing_world(TIP, side), f"fore.{tag}")
+    bone(f"wup.{tag}", wing_world((0, 0, 0), side), wing_world(ELBOW, side), "chest")
+    bone(f"wfore.{tag}", wing_world(ELBOW, side), wing_world(WRIST, side), f"wup.{tag}")
+    for name, points in FINGER_POINTS.items():
+        for k in range(3):
+            bone(f"{name}_{k + 1}.{tag}", wing_world(points[k], side), wing_world(points[k + 1], side),
+                 f"{name}_{k}.{tag}" if k else f"wfore.{tag}")
+    # The membrane between the fifth finger and the flank follows a fitted affine map: the parent
+    # turns and scales, the child turns back, so together they can squash the panel as it folds.
+    for kind, centre in (("panel", wing_world((1.0, 1.2, 0.0), side)), ("pro", wing_world((1.0, -0.3, 0.0), side))):
+        bone(f"{kind}.{tag}", centre, centre + Vector((0, 0.3, 0)), "chest")
+        bone(f"{kind}_skin.{tag}", centre, centre + Vector((0, 0.25, 0)), f"{kind}.{tag}")
 
 
 def weigh(point, names, influences=3, power=4.0):
     return shapes.envelope_weights(point, [(n, BONES[n][0], BONES[n][1]) for n in names], power, influences)
 
 
-skinned = []  # every deforming object
+skinned = []
 
 
-def part(name, mat, piece, weights):
-    """weights: a bone name (rigid), or a function point -> {bone: weight}."""
-    obj = shapes.make_object(name, mat, piece)
-    if isinstance(weights, str):
-        shapes.assign_weights(obj, [{weights: 1.0}] * len(piece.verts))
-    else:
-        shapes.assign_weights(obj, [weights(v) for v in piece.verts])
-    skinned.append(obj)
-    return obj
-
-
-def batch_build(batch):
+def build(batch):
     obj = batch.build()
     if obj:
         skinned.append(obj)
     return obj
 
 
-# ---------------------------------------------------------------- trunk: one sculpted surface
+# ---------------------------------------------------------------- trunk: nape to tail tip, four legs
 
-trunk_nodes = [
-    ((0, 0.62, 1.13), 0.29, 0.30),      # 0 rump
-    ((0, 0.36, 1.1), 0.26, 0.27),       # 1 loin
-    ((0, 0.12, 1.09), 0.25, 0.25),      # 2 waist, tucked
-    ((0, -0.15, 1.1), 0.31, 0.34),      # 3 ribcage
-    ((0, -0.38, 1.14), 0.34, 0.38),     # 4 deep chest
-    ((0, -0.6, 1.38), 0.27, 0.28),      # 5 breast
-    ((0, -0.71, 1.62), 0.18, 0.19),     # 6 neck
-    ((0, -0.78, 1.83), 0.15, 0.155),    # 7 throat
-    ((0, -0.82, 1.99), 0.12, 0.12),     # 8 nape, inside the skull
-    ((0, 0.86, 1.16), 0.1, 0.1),        # 9 tail root
-]
-trunk_edges = [(0, 1), (1, 2), (2, 3), (3, 4), (4, 5), (5, 6), (6, 7), (7, 8), (0, 9)]
+LIMB_CHAINS, chains = [], [MAIN]
 for side, _ in SIDES:
-    s = len(trunk_nodes)
-    trunk_nodes += [((0.19 * side, 0.6, 0.97), 0.23, 0.24), ((0.25 * side, 0.42, 0.62), 0.155, 0.165),
-                    ((0.25 * side, 0.75, 0.34), 0.092, 0.1), ((0.25 * side, 0.69, 0.16), 0.078, 0.08),
-                    ((0.25 * side, 0.63, 0.08), 0.085, 0.064)]   # down into the paw
-    trunk_edges += [(0, s), (s, s + 1), (s + 1, s + 2), (s + 2, s + 3), (s + 3, s + 4)]
-    s = len(trunk_nodes)
-    trunk_nodes += [((0.19 * side, -0.42, 0.94), 0.15, 0.16), ((0.24 * side, -0.5, 0.62), 0.095, 0.1)]
-    trunk_edges += [(4, s), (s, s + 1)]
-trunk = shapes.skin_body("Griffon | Trunk", hide, trunk_nodes, trunk_edges)
+    for limb, joint in ((FRONT, CHEST), (HIND, HIPS)):
+        mirrored = [((p[0] * side, p[1], p[2]), a, b) for p, a, b in limb]
+        root = MAIN[joint]
+        chains.append([(root[0], root[1] * 0.75, root[2] * 0.75)] + mirrored)
+        LIMB_CHAINS.append([Vector(p) for p, a, b in mirrored])
 
-# Procedural sculpting: muscle masses, bony landmarks and hollows (centre, radius, push).
-stamps = [((0, 0.15, 0.84), 0.2, -0.045), ((0, -0.05, 1.42), 0.1, -0.01), ((0, 0.3, 1.38), 0.1, -0.012)]
+# Muscle masses and hollows blended into the trunk: (centre, radii, rotation, negative).
+masses = [((0, 0.05, 1.02), (0.4, 0.42, 0.16), None, True),            # belly drawn up between ribs and hips
+          ((0, -1.05, 1.18), (0.22, 0.32, 0.18), None, False)]          # keel of the breastbone
 for side, _ in SIDES:
     x = lambda v: v * side
-    stamps += [
-        ((x(0.27), -0.3, 1.3), 0.14, 0.03),      # scapula and shoulder mass
-        ((x(0.3), -0.08, 1.04), 0.17, 0.016),    # ribcage
-        ((x(0.25), 0.27, 0.98), 0.1, -0.022),    # flank hollow before the haunch
-        ((x(0.19), 0.55, 1.28), 0.09, 0.02),     # point of the hip
-        ((x(0.12), 0.74, 1.3), 0.12, 0.018),     # croup
-        ((x(0.3), 0.44, 0.84), 0.13, 0.035),     # quadriceps
-        ((x(0.24), 0.77, 0.86), 0.13, 0.042),    # hamstrings
-        ((x(0.27), 0.67, 0.5), 0.07, 0.022),     # gastrocnemius
-        ((x(0.25), 0.82, 0.36), 0.04, 0.008),    # point of the hock
-        ((x(0.17), -0.52, 1.0), 0.1, 0.02),      # pectoral, where the foreleg meets the breast
+    tilt = lambda a, b=0.0: Matrix.Rotation(a, 3, "X") @ Matrix.Rotation(b * side, 3, "Z")
+    masses += [
+        ((x(0.3), -0.92, 2.08), (0.22, 0.4, 0.18), tilt(-0.3, 0.2), False),     # wing muscles over the shoulders
+        ((x(0.36), -1.25, 1.42), (0.22, 0.2, 0.3), tilt(0.5), False),           # pectorals
+        ((x(0.52), -0.95, 1.36), (0.18, 0.22, 0.24), tilt(0.2), False),         # deltoid
+        ((x(0.45), -0.4, 1.62), (0.2, 0.55, 0.42), None, False),                # ribcage
+        ((x(0.53), 0.28, 1.4), (0.12, 0.25, 0.22), None, True),                 # flank hollow before the haunch
+        ((x(0.3), 0.92, 1.95), (0.24, 0.38, 0.2), tilt(0.15), False),           # croup and glutes
+        ((x(0.6), 0.66, 1.15), (0.2, 0.3, 0.38), tilt(0.5), False),             # quadriceps
+        ((x(0.48), 1.06, 1.12), (0.2, 0.26, 0.4), tilt(-0.25), False),          # hamstrings
+        ((x(0.6), 0.8, 0.6), (0.12, 0.16, 0.2), tilt(-0.6), False),             # calf
+        ((x(0.6), -0.82, 1.08), (0.15, 0.2, 0.26), tilt(-0.3), False),          # triceps
+        ((x(0.58), -0.88, 0.66), (0.12, 0.14, 0.2), tilt(0.4), False),          # forearm flexors
+        ((x(0.22), 1.42, 1.72), (0.2, 0.42, 0.24), tilt(0.25), False),          # tail-base muscles
+        ((x(0.17), -1.72, 2.35), (0.17, 0.25, 0.28), tilt(-0.9), False),        # neck muscles
     ]
-shapes.displace(trunk, stamps)
-TRUNK_BONES = ["pelvis", "spine", "chest", "neck1", "neck2", "neck3", "head", "tail1"] + \
-    [f"{b}.{t}" for t in "RL" for b in ("thigh", "shin", "hfoot", "arm", "tarsus")]
+trunk = shapes.blob_body("Dragon | Trunk", hide, chains, masses, resolution=0.028, decimate=None)
+TRI_TARGET = 21000
+faces = len(trunk.data.polygons)
+shapes.apply_modifier(trunk, "DECIMATE", ratio=min(1.0, TRI_TARGET / max(1, faces * 2)))
+TRUNK_BONES = ["pelvis", "spine1", "spine2", "chest", "throat", "head"] + NECKS + TAILS + \
+    [f"{b}.{t}" for t in "RL" for b in ("upperarm", "forearm", "hand", "thigh", "shin", "foot")]
 shapes.assign_weights(trunk, [weigh(v.co, TRUNK_BONES) for v in trunk.data.vertices])
 skinned.append(trunk)
 
-
-# ---------------------------------------------------------------- tail with a tufted tip
-
-tail_points = []
-for i, (a, b) in enumerate(zip(TAIL, TAIL[1:])):
-    for k in range(2):
-        t = (i * 2 + k) / ((len(TAIL) - 1) * 2)
-        tail_points.append((a.lerp(b, k / 2), 0.078 - 0.042 * t, 0.078 - 0.042 * t))
-tail_points.append((TAIL[-1] + Vector((0, 0.02, 0.04)), 0, 0))
-TAIL_BONES = ["pelvis"] + [f"tail{i}" for i in range(1, 6)]
-part("Griffon | Tail", paws, loft(tail_points, ring=12), lambda p: weigh(p, TAIL_BONES))
-tuft = shapes.Batch("Griffon | Tail tuft", tuft_fur)
-end, along = TAIL[-1] + Vector((0, -0.04, -0.02)), (TAIL[-1] - TAIL[-2]).normalized()
-for k in range(30):
-    angle = rng.uniform(0, 2 * math.pi)
-    spread = rng.uniform(0.15, 0.7)
-    sideways = along.orthogonal().normalized()
-    sideways.rotate(Matrix.Rotation(angle, 3, along))
-    direction = (along + sideways * spread).normalized()
-    length = rng.uniform(0.13, 0.27)
-    bend = Vector((0, 0, -0.04 * rng.random()))
-    start = end + sideways * rng.uniform(0.0, 0.03)
-    tuft.add(loft([(start, 0.022, 0.022), (start + direction * length * 0.45 + bend * 0.5, 0.018, 0.016),
-                   (start + direction * length + bend, 0, 0)], ring=5), weights={"tail5": 1.0})
-batch_build(tuft)
+MAIN_POINTS = [Vector(p[0]) for p in MAIN]
+MAIN_RADII = [p[2] for p in MAIN]
+MAIN_ARC = [0.0]
+for a, b in zip(MAIN_POINTS, MAIN_POINTS[1:]):
+    MAIN_ARC.append(MAIN_ARC[-1] + (b - a).length)
 
 
-# ---------------------------------------------------------------- hind paws: pad, four toes, sheathed claws
-
-for side, tag in SIDES:
-    foot = f"hfoot.{tag}"
-    paw = shapes.Batch(f"Griffon | Hind paw {tag}", paws)
-    claws = shapes.Batch(f"Griffon | Hind claws {tag}", lion_claw)
-    paw.add(ellipsoid((0.25 * side, 0.6, 0.072), (0.092, 0.13, 0.068), segments=18, rings=10), weights={foot: 1.0})
-    for dx, dy, r in ((-0.066, 0.508, 0.029), (-0.023, 0.482, 0.034), (0.022, 0.482, 0.034), (0.064, 0.508, 0.029)):
-        centre = Vector((0.25 * side + dx * side, dy, 0.05))
-        paw.add(ellipsoid(centre, (r, r * 1.35, r * 1.15), Matrix.Rotation(0.25, 3, "X"), segments=12, rings=8), weights={foot: 1.0})
-        tip = centre + Vector((0, -r * 1.2, 0.0))
-        claws.add(loft([(tip + Vector((0, 0.012, 0.012)), 0.008, 0.011), (tip + Vector((0, -0.012, 0.002)), 0.005, 0.007),
-                        (tip + Vector((0, -0.026, -0.022)), 0, 0)], ring=6), weights={foot: 1.0})
-    batch_build(paw)
-    batch_build(claws)
+def nearest_on(points, p):
+    best = (1e9, 0, 0.0)
+    for i, (a, b) in enumerate(zip(points, points[1:])):
+        axis = b - a
+        t = max(0.0, min(1.0, (p - a).dot(axis) / max(axis.length_squared, 1e-9)))
+        d = (p - (a + axis * t)).length
+        if d < best[0]:
+            best = (d, i, t)
+    return best
 
 
-# ---------------------------------------------------------------- eagle forelegs: scutes, knuckled toes, talons
+def trunk_body(p):
+    """Body attribute for the trunk: arc length along the spine, angle around it, scale size."""
+    d, i, t = nearest_on(MAIN_POINTS, p)
+    for chain in LIMB_CHAINS:
+        dl, il, tl = nearest_on(chain, p)
+        if dl < d * 0.85 and p.z < 1.55:
+            depth = (il + tl) / (len(chain) - 1)
+            return (0.0, 0.42, 0.62 - 0.32 * depth)
+    a, b = MAIN_POINTS[i], MAIN_POINTS[i + 1]
+    tangent = (b - a).normalized()
+    up = Vector((0, 0, 1)) - tangent * tangent.z
+    up = up.normalized() if up.length > 1e-4 else Vector((0, 1, 0))
+    side = tangent.cross(up)
+    offset = p - (a + (b - a) * t)
+    around = math.atan2(offset.dot(side), offset.dot(up)) / math.pi
+    radius = MAIN_RADII[i] + (MAIN_RADII[i + 1] - MAIN_RADII[i]) * t
+    size = max(0.4, min(1.0, radius / 0.55))
+    return (MAIN_ARC[i] + (MAIN_ARC[i + 1] - MAIN_ARC[i]) * t, abs(around), size)
+
+
+shapes.set_attribute(trunk, "Body", trunk_body)
+trunk_tree = BVHTree.FromObject(trunk, bpy.context.evaluated_depsgraph_get())
+
+
+# ---------------------------------------------------------------- feet: pads, knuckled toes, talons
 
 def talon_profile(angle):
-    """Laterally compressed, keeled cross-section for talons."""
-    return 0.62 * math.cos(angle), math.sin(angle) * (1.0 if math.sin(angle) > 0 else 0.8)
+    return 0.58 * math.cos(angle), math.sin(angle) * (1.0 if math.sin(angle) > 0 else 0.75)
 
 
+def claw(base, direction, size, drop=None):
+    """A curved, keeled talon from `base` along `direction`, hooking down to the ground (or by
+    `drop` metres)."""
+    direction = Vector(direction).normalized()
+    drop = max(base.z - 0.004, 0.02) if drop is None else drop
+    pts = [(base + direction * -0.02 * size + Vector((0, 0, 0.02 * size)), 0.034 * size, 0.04 * size),
+           (base + direction * 0.05 * size + Vector((0, 0, 0.022 * size)), 0.025 * size, 0.032 * size),
+           (base + direction * 0.11 * size + Vector((0, 0, 0.0)), 0.016 * size, 0.02 * size),
+           (base + direction * 0.145 * size + Vector((0, 0, -drop * 0.55)), 0.009 * size, 0.011 * size),
+           (base + direction * 0.15 * size + Vector((0, 0, -drop)), 0, 0)]
+    piece = loft(pts, ring=10, profile=talon_profile)
+    return piece, shapes.along(piece, pts[0][0], pts[-1][0])
+
+
+FOOT_BODY = (0.0, 0.4, 0.3)
 for side, tag in SIDES:
-    legs = shapes.Batch(f"Griffon | Foreleg {tag}", scales)
-    claws = shapes.Batch(f"Griffon | Talons {tag}", talon)
-    top, ankle = Vector((0.25 * side, -0.5, 0.64)), Vector((0.25 * side, -0.58, 0.115))
-    ridges = []
-    for i in range(17):
-        t = i / 16
-        radius = (0.068 - 0.016 * t) * (1.0 if i % 2 else 1.07)
-        ridges.append((top.lerp(ankle, t), radius, radius * 1.05))
-    leg_names = [f"tarsus.{tag}", f"ffoot.{tag}", f"arm.{tag}"]
-    tarsus = loft(ridges, ring=12)
-    legs.add(tarsus, weights=[weigh(v, leg_names, 2) for v in tarsus.verts])
-    legs.add(ellipsoid(ankle + Vector((0, -0.01, -0.04)), (0.058, 0.064, 0.04), segments=14, rings=8), weights={f"ffoot.{tag}": 1.0})
-    for yaw, length, talon_size in ((-0.44, 0.2, 1.0), (0.0, 0.245, 1.1), (0.44, 0.2, 1.0), (math.pi, 0.13, 1.25)):
-        direction = Vector((math.sin(yaw) * side, -math.cos(yaw), 0))
-        base = ankle + Vector((0, 0, -0.045))
-        points = []
-        for t, r, lift in ((0.0, 0.034, 0.0), (0.3, 0.03, 0.004), (0.45, 0.034, 0.004), (0.7, 0.027, -0.004), (0.82, 0.029, -0.004), (1.0, 0.023, -0.012)):
-            points.append((base + direction * length * t + Vector((0, 0, lift - 0.018 * t * t)), r, r * 0.95))
-        legs.add(loft(points, ring=10), weights={f"ffoot.{tag}": 1.0})
-        tip = points[-1][0]
-        k = talon_size
-        drop = tip.z - 0.002   # the talon's point just reaches the ground
-        claw = [(tip + direction * -0.012 + Vector((0, 0, 0.012)), 0.02 * k, 0.023 * k),
-                (tip + direction * 0.026 * k + Vector((0, 0, 0.012)), 0.014 * k, 0.018 * k),
-                (tip + direction * 0.055 * k + Vector((0, 0, 0.0)), 0.0095 * k, 0.012 * k),
-                (tip + direction * 0.072 * k + Vector((0, 0, -drop * 0.55)), 0.0055 * k, 0.0068 * k),
-                (tip + direction * 0.074 * k + Vector((0, 0, -drop)), 0, 0)]
-        claws.add(loft(claw, ring=10, profile=talon_profile), weights={f"ffoot.{tag}": 1.0})
-    batch_build(legs)
-    batch_build(claws)
+    for kind, centre, toes_spec, foot_bone in (
+            ("front", Vector((0.52 * side, -1.2, 0.08)), ((-0.5, 0.24), (-0.16, 0.29), (0.18, 0.29), (0.52, 0.25), (2.5, 0.14)), f"hand.{tag}"),
+            ("hind", Vector((0.57 * side, 0.68, 0.08)), ((-0.4, 0.3), (-0.12, 0.36), (0.18, 0.35), (0.52, 0.28), (2.9, 0.18)), f"toes.{tag}")):
+        foot = shapes.Batch(f"Dragon | {kind} foot {tag}", hide)
+        nails = shapes.Batch(f"Dragon | {kind} claws {tag}", claws)
+        pad_radii = (0.13, 0.12, 0.06) if kind == "front" else (0.14, 0.13, 0.065)
+        foot.add(ellipsoid(centre + Vector((0, 0, -0.01)), pad_radii, segments=16, rings=10), weights={foot_bone: 1.0}, body=FOOT_BODY)
+        for yaw, length in toes_spec:
+            direction = Vector((math.sin(yaw) * side, -math.cos(yaw), 0))
+            base = centre + direction * 0.06 + Vector((0, 0, 0.01))
+            scale = 1.3 if kind == "hind" else 1.15
+            if yaw > 2:   # the dewclaw or hind spur, set higher up the foot
+                base = centre + direction * 0.1 + Vector((0, 0, 0.12))
+            ring = []
+            for t, r, lift in ((0.0, 0.07, 0.0), (0.3, 0.058, 0.012), (0.42, 0.065, 0.012), (0.68, 0.05, 0.0),
+                               (0.78, 0.054, -0.004), (1.0, 0.042, -0.025)):
+                drop = 0.0 if yaw > 2 else -0.035 * t * t
+                ring.append((base + direction * length * t + Vector((0, 0, lift + drop)), r * scale * 0.85, r * scale * 0.8))
+            foot.add(loft(ring, ring=12), weights={foot_bone: 1.0}, body=FOOT_BODY)
+            piece, values = claw(ring[-1][0], direction + Vector((0, 0, -0.1)), 1.15 * scale if yaw < 2 else 0.8 * scale)
+            nails.add(piece, weights={foot_bone: 1.0}, body=values)
+        build(foot)
+        build(nails)
 
 
-# ---------------------------------------------------------------- head: sculpted skull, beak, eyes, lids
+# ---------------------------------------------------------------- tail spines and dorsal crest
 
-skull = shapes.make_object("Griffon | Head", face, ellipsoid(HEAD, (0.13, 0.2, 0.135), Matrix.Rotation(-0.12, 3, "X"), 44, 28))
-H = lambda x, y, z: HEAD + Vector((x, y, z))
-
-
-def head_profile(co):
-    """Eagle proportions: the crown slopes down into the culmen and the face narrows to the cere."""
-    local = co - HEAD
-    front = smooth(0.0, -0.21, local.y)
-    if local.z > -0.02:
-        local.z = -0.02 + (local.z + 0.02) * (1 - 0.42 * front)
-    local.x *= 1 - 0.28 * front
-    local.z -= 0.025 * front
-    return HEAD + local
+spikes = shapes.Batch("Dragon | Dorsal spines", spine)
+SPINE_BONES = ["pelvis", "spine1", "spine2", "chest"] + NECKS + TAILS
 
 
-shapes.reshape(skull, head_profile)
-head_stamps = [(H(0, 0.02, 0.13), 0.07, -0.016),         # flat crown between the brows
-               (H(0, -0.08, -0.12), 0.08, 0.012),        # throat
-               (H(0, 0.14, 0.04), 0.1, 0.012)]           # occiput
+def spine_size(arc):
+    """Spine height along the body: small on the neck, tallest over the shoulders, dwindling down the tail."""
+    shoulder = MAIN_ARC[CHEST]
+    if arc < shoulder:
+        return 0.07 + 0.11 * smooth(0.0, shoulder, arc)
+    return 0.18 * (1 - smooth(shoulder, MAIN_ARC[-1] - 0.2, arc)) ** 1.2 + 0.02
+
+
+arc = 0.25
+while arc < MAIN_ARC[-1] - 0.25:
+    i = max(k for k in range(len(MAIN_ARC) - 1) if MAIN_ARC[k] <= arc)
+    t = (arc - MAIN_ARC[i]) / (MAIN_ARC[i + 1] - MAIN_ARC[i])
+    centre = MAIN_POINTS[i].lerp(MAIN_POINTS[i + 1], t)
+    tangent = (MAIN_POINTS[i + 1] - MAIN_POINTS[i]).normalized()
+    up = (Vector((0, 0, 1)) - tangent * tangent.z).normalized()
+    hit = trunk_tree.ray_cast(centre + up * 1.5, -up)[0]
+    size = spine_size(arc) * rng.uniform(0.9, 1.08)
+    if hit is not None:
+        base = hit - up * size * 0.25
+        lean = (up + tangent * 0.9).normalized()
+        pts = [(base - tangent * size * 0.18, size * 0.13, size * 0.4), (base + lean * size * 0.45, size * 0.09, size * 0.22),
+               (base + lean * size * 0.85 + tangent * size * 0.1, size * 0.04, size * 0.08), (base + lean * size * 1.08 + tangent * size * 0.2, 0, 0)]
+        piece = loft(pts, ring=8, profile=lambda a: (0.5 * math.cos(a), math.sin(a)))
+        spikes.add(piece, weights=weigh(base, SPINE_BONES, 1), body=shapes.along(piece, base, pts[-1][0]))
+    arc += max(0.12, size * 1.25)
+build(spikes)
+
+
+# ---------------------------------------------------------------- head: skull, jaw, mouth, eyes, horns
+
+head_objects = []
+
+
+def local_obj(name, mat, piece):
+    obj = shapes.make_object(name, mat, piece)
+    head_objects.append(obj)
+    return obj
+
+
+def lip(y):
+    """The mouth line: level along the snout, rising behind the last teeth towards the jaw hinge."""
+    return -0.07 + 0.035 * smooth(-0.2, 0.08, y)
+
+
+def shut(obj, upper):
+    """Flatten a jaw against the lip line so the mouth closes cleanly."""
+    def press(co):
+        limit = lip(co.y) - (0.0 if upper else 0.004)
+        if co.y < 0.1 and ((upper and co.z < limit) or (not upper and co.z > limit)):
+            co.z = limit + (co.z - limit) * 0.1
+        return co
+    shapes.reshape(obj, press)
+
+
+# The skull, sculpted from blended masses: cranium, a tapering muzzle, brow ridges that run back
+# into the horn bosses, cheekbones, jaw muscles and nostril mounds, with the eye sockets carved out.
+skull_chains = [[((0, -0.12, 0.02), 0.2, 0.15), ((0, -0.45, 0.0), 0.165, 0.12), ((0, -0.72, -0.01), 0.125, 0.1),
+                 ((0, -0.84, -0.02), 0.1, 0.085)],
+                [((0, -0.6, 0.085), 0.03, 0.025), ((0, -0.25, 0.15), 0.035, 0.03)]]
+skull_masses = [((0, 0.03, 0.04), (0.24, 0.25, 0.165), None, False), ((0, 0.16, 0.0), (0.19, 0.14, 0.15), None, False)]
 for side, _ in SIDES:
-    head_stamps += [
-        # The supraorbital ridge: a straight shelf from above the cere back over the eye.
-        (H(0.05 * side, -0.19, 0.06), H(0.085 * side, -0.06, 0.09), 0.022, 0.04),
-        (H(0.075 * side, -0.15, 0.07), H(0.09 * side, -0.1, 0.08), 0.018, 0.02),
-        (H(0.094 * side, -0.118, 0.025), 0.024, -0.011),  # eye socket under the shelf
-        (H(0.096 * side, -0.05, -0.05), 0.055, 0.02),     # cheek behind and below the eye
-        (H(0.11 * side, 0.03, 0.0), 0.08, 0.008),         # ear coverts, widening the back of the head
-    ]
-shapes.displace(skull, head_stamps, snap=True)
-shapes.assign_weights(skull, [{"head": 1.0}] * len(skull.data.vertices))
-skinned.append(skull)
+    x = lambda v: v * side
+    skull_chains += [[((x(0.09), -0.44, 0.1), 0.028, 0.026), ((x(0.19), -0.15, 0.15), 0.045, 0.04),
+                      ((x(0.17), 0.07, 0.18), 0.05, 0.045)],                        # brow ridge into the horn boss
+                     [((x(0.19), -0.36, -0.025), 0.035, 0.035), ((x(0.255), -0.02, -0.01), 0.055, 0.05),
+                      ((x(0.25), 0.1, -0.02), 0.05, 0.05)]]                        # cheekbone
+    skull_masses += [((x(0.235), 0.06, -0.05), (0.08, 0.12, 0.1), None, False),       # jaw muscle
+                     ((x(0.085), -0.76, 0.045), (0.042, 0.065, 0.035), None, False),  # nostril mound
+                     ((x(0.205), -0.2, 0.075), (0.045, 0.055, 0.04), None, True)]     # eye socket
+skull = shapes.blob_body("Dragon | Skull", face, skull_chains, skull_masses, resolution=0.011)
+head_objects.append(skull)
+shut(skull, True)
+face_stamps = []
+for side, _ in SIDES:
+    face_stamps += [((0.093 * side, -0.79, 0.06), 0.016, -0.022),                      # nostril
+                    ((0.13 * side, -0.6, -0.055), 0.04, 0.012)]                         # lip over the fang
+shapes.displace(skull, face_stamps, snap=True)
+
+jaw_chains = [[((0, -0.3, -0.13), 0.13, 0.04), ((0, -0.62, -0.115), 0.08, 0.035)]]
+for side, _ in SIDES:
+    x = lambda v: v * side
+    jaw_chains.append([((x(0.2), 0.1, -0.055), 0.055, 0.07), ((x(0.19), -0.15, -0.115), 0.06, 0.06),
+                       ((x(0.13), -0.5, -0.11), 0.05, 0.045), ((x(0.05), -0.78, -0.105), 0.045, 0.04)])
+jaw = shapes.blob_body("Dragon | Jaw", face, jaw_chains, [((0, -0.8, -0.105), (0.06, 0.05, 0.045), None, False)],
+                       resolution=0.011)
+head_objects.append(jaw)
+shut(jaw, False)
+for obj in (skull, jaw):
+    shapes.apply_modifier(obj, "DECIMATE", ratio=min(1.0, 2600 / max(1, len(obj.data.polygons))))
 
 
-def upper_beak(angle):
-    """D-section upper mandible: rounded culmen, flattened palate, keen tomial edges."""
-    c, s = math.cos(angle), math.sin(angle)
-    if s >= 0:
-        return math.copysign(abs(c) ** 0.75, c), s
-    return math.copysign(abs(c) ** 0.55, c), -0.38 * abs(s) ** 0.8
+def lip_edge(obj, y, top):
+    """Half-width of a jaw's lip line at local y (top=True for the skull's lower edge)."""
+    best = 0.0
+    for v in obj.data.vertices:
+        if abs(v.co.y - y) < 0.025 and (v.co.z < lip(y) + 0.015 if top else v.co.z > lip(y) - 0.02):
+            best = max(best, abs(v.co.x))
+    return best
 
 
-def lower_beak(angle):
-    c, s = math.cos(angle), math.sin(angle)
-    if s >= 0:
-        return math.copysign(abs(c) ** 0.55, c), 0.3 * s ** 0.8
-    return math.copysign(abs(c) ** 0.8, c), s
+inner = shapes.Batch("Dragon | Mouth", mouth)
+inner.add(ellipsoid((0, -0.34, -0.068), (0.17, 0.44, 0.012), segments=24, rings=10), weights={"head": 1.0})
+inner.add(ellipsoid((0, -0.32, -0.07), (0.15, 0.4, 0.01), segments=24, rings=10), weights={"jaw": 1.0})
+inner.add(ellipsoid((0, 0.04, -0.1), (0.16, 0.12, 0.09), segments=16, rings=10), weights={"head": 0.5, "jaw": 0.5})
+head_objects.append(build(inner))
+tongue = shapes.Batch("Dragon | Tongue", tongue_mat)
+tongue.add(loft([((0, 0.02, -0.08), 0.065, 0.02), ((0, -0.22, -0.075), 0.062, 0.02), ((0, -0.42, -0.076), 0.045, 0.015),
+                 ((0, -0.53, -0.078), 0.022, 0.009), ((0, -0.56, -0.079), 0, 0)], ring=12), weights={"jaw": 1.0})
+head_objects.append(build(tongue))
 
-
-# A deep base and a culmen that arches from the cere to the hook, rather than a straight bill.
-upper = [((0, -0.94, 2.0), 0.07, 0.088), ((0, -1.0, 1.998), 0.061, 0.082), ((0, -1.06, 1.99), 0.051, 0.073),
-         ((0, -1.115, 1.972), 0.041, 0.061), ((0, -1.155, 1.942), 0.032, 0.048), ((0, -1.18, 1.902), 0.023, 0.034),
-         ((0, -1.184, 1.864), 0.013, 0.02), ((0, -1.172, 1.834), 0, 0)]
-part("Griffon | Upper beak", beak, loft(upper, ring=28, profile=upper_beak), "head")
-lower = [((0, -0.9, 1.955), 0.046, 0.026), ((0, -0.98, 1.957), 0.043, 0.024), ((0, -1.05, 1.96), 0.035, 0.019),
-         ((0, -1.1, 1.963), 0.024, 0.014), ((0, -1.13, 1.966), 0, 0)]
-part("Griffon | Lower beak", beak, loft(lower, ring=20, profile=lower_beak), "jaw")
-part("Griffon | Cere", cere, loft([((0, -0.925, 2.002), 0.078, 0.096), ((0, -0.975, 2.0), 0.071, 0.092),
-                                   ((0, -1.012, 1.998), 0.065, 0.087), ((0, -1.02, 1.998), 0, 0)], ring=28, profile=upper_beak), "head")
-features = shapes.Batch("Griffon | Nostrils", nostril)
-for side, tag in SIDES:
-    features.add(ellipsoid((0.052 * side, -0.995, 2.04), (0.008, 0.016, 0.007), Matrix.Rotation(0.4 * side, 3, "Z"), 10, 6),
-                 weights={"head": 1.0})
-batch_build(features)
-
-eyes = shapes.Batch("Griffon | Eyes", iris)
-lids = shapes.Batch("Griffon | Eyelids", face)   # feathered lids that read as the brow's edge
-for side, tag in SIDES:
-    centre = HEAD + Vector((EYE_OFFSET.x * side, EYE_OFFSET.y, EYE_OFFSET.z))
-    gaze = Vector((GAZE.x * side, GAZE.y, GAZE.z))
-    aim = Vector((0, 0, 1)).rotation_difference(gaze).to_matrix()
-    eyes.add(ellipsoid(centre, (0.03, 0.03, 0.031), aim, segments=24, rings=16), weights={"head": 1.0})
-    # Lids are caps about "up"; the upper one tilts down towards the beak for the eagle's stern look.
-    up = (Vector((0, 0, 1)) - gaze * gaze.z).normalized()
-    up.rotate(Matrix.Rotation(-0.2 * side, 3, gaze))
-    lids.add(eyelid(centre, 0.03, up, math.radians(66), 0.0025), weights={f"lid.{tag}": 1.0})
-    lids.add(eyelid(centre, 0.03, -up, math.radians(64), 0.0022), weights={"head": 1.0})
-batch_build(eyes)
-batch_build(lids)
-
-
-# ---------------------------------------------------------------- feather coat over head, neck, breast and shoulders
-
-coat = shapes.Batch("Griffon | Coat", plumes)
-CREAM, GOLD, TAWNY, BRONZE = (0.95, 0.85, 0.62), (0.86, 0.52, 0.12), (0.72, 0.44, 0.14), (0.4, 0.23, 0.075)
-COAT_BONES = ["head", "neck3", "neck2", "neck1", "chest", "spine", "arm.R", "arm.L"]
-
-
-def transition_edge(p):
-    """Where plumage gives way to fur: a ragged line around the ribs."""
-    return -0.05 + 0.09 * noise.noise(p * 4.0)
-
-
-def coat_size(p):
-    d = (p - BEAK_BASE).length
-    size = 0.03 + 0.21 * smooth(0.13, 0.85, d)
-    if p.z < 1.0 and abs(p.x) > 0.1 and p.y < -0.3:
-        size = 0.13 + 0.05 * smooth(1.0, 0.7, p.z)     # trousers over the forelegs
-    return min(size, 0.26)
-
-
-def coat_spacing(p):
-    d = (p - BEAK_BASE).length
-    if d < 0.13 or p.z < 0.62:
-        return None
-    edge = transition_edge(p)
-    if p.y > edge + 0.24:
-        return None
-    gap = 0.4 * coat_size(p)
-    if p.y > edge:
-        gap *= 1 + 3.5 * (p.y - edge) / 0.24       # thinning out into the fur
-    return gap
-
-
-def coat_flow(p, normal):
-    flow = p - BEAK_BASE
+fangs = shapes.Batch("Dragon | Teeth", teeth)
+for upper_row in (True, False):
+    count = 12 if upper_row else 10
     for side, _ in SIDES:
-        eye = HEAD + Vector((EYE_OFFSET.x * side, EYE_OFFSET.y, EYE_OFFSET.z))
-        weight = math.exp(-((p - eye).length / 0.06) ** 2)
-        flow = flow.normalized() + (p - eye).normalized() * 1.5 * weight
-    if p.z < 1.05 and abs(p.x) > 0.1 and p.y < -0.3:
-        flow = Vector((0, 0.15, -1))
-    flow = flow - normal * flow.dot(normal)
-    return flow.normalized()
+        for k in range(count):
+            t = (k + jitter(0.2)) / (count - 1)
+            y = -0.8 + 0.74 * t if upper_row else -0.77 + 0.64 * t
+            width = lip_edge(skull if upper_row else jaw, y, upper_row)
+            canine = (k == 2) if upper_row else (k == 1)
+            length = (0.085 if canine else (0.045 - 0.018 * t) * rng.uniform(0.75, 1.2)) * (1 if upper_row else 0.85)
+            radius = 0.022 if canine else 0.012 + 0.006 * (1 - t)
+            if upper_row:
+                root = Vector((side * width * 0.94, y, lip(y) + 0.004))
+                down = Vector((side * 0.12, 0.08, -1)).normalized()
+            else:
+                root = Vector((side * width * 0.9, y, lip(y) - 0.008))
+                down = Vector((side * 0.06, 0.1, 1)).normalized()
+            tip = root + down * length + Vector((0, 0.012, 0))
+            pts = [(root - down * 0.02, radius, radius * 1.1), (root + down * length * 0.35, radius * 0.85, radius),
+                   (root + down * length * 0.75 + Vector((0, 0.006, 0)), radius * 0.45, radius * 0.5), (tip, 0, 0)]
+            piece = loft(pts, ring=7, profile=lambda a: (0.75 * math.cos(a), math.sin(a)))
+            fangs.add(piece, weights={("head" if upper_row else "jaw"): 1.0}, body=shapes.along(piece, root, tip))
+head_objects.append(build(fangs))
+
+horns = shapes.Batch("Dragon | Horns", horn)
 
 
-def coat_tint(p, normal):
-    d = (p - BEAK_BASE).length
-    back = normal.y > 0.15 or normal.z > 0.6
-    colour = lerp(CREAM, GOLD if back else TAWNY, smooth(0.16, 0.62, d))
-    if p.z > 1.25 and p.y > -0.62:
-        colour = lerp(colour, BRONZE, smooth(-0.62, -0.3, p.y))
-    if p.z < 1.05 and abs(p.x) > 0.1 and p.y < -0.3:
-        colour = lerp(colour, (0.62, 0.43, 0.2), 0.7)
-    return lerp(colour, FUR, smooth(transition_edge(p) - 0.12, transition_edge(p) + 0.12, p.y))
+def horn_piece(path, radius, owner="head", ring=12):
+    points = shapes.polyline(path)
+    count = max(6, int(sum((Vector(b) - Vector(a)).length for a, b in zip(path, path[1:])) / 0.06))
+    pts = []
+    for k in range(count + 1):
+        t = k / count
+        r = radius * (1 - t) ** 0.85 * (1.0 if k % 2 else 1.035)
+        pts.append((points(t), r, r * 1.06))
+    pts[-1] = (pts[-1][0], 0, 0)
+    piece = loft(pts, ring=ring)
+    horns.add(piece, weights={owner: 1.0}, body=[(max(0.0, min(1.0, ((Vector(v) - Vector(path[0])).length) /
+                                                              max((Vector(path[-1]) - Vector(path[0])).length, 1e-6))), 0, 0)
+                                                 for v in piece.verts])
 
 
-for location, normal in shapes.scatter([skull, trunk], coat_spacing, seed=3, candidates=90000):
-    size = coat_size(location) * rng.uniform(0.88, 1.12)
-    flow = coat_flow(location, normal)
-    flow.rotate(Matrix.Rotation(jitter(0.14), 3, normal))
-    edge = transition_edge(location)
-    nape = location.y > -0.88 and 1.5 < location.z < 2.05 and normal.y > 0.3
-    if location.y > edge:
-        profile, width, length, variant = WISP, 0.32, size * 1.15, rng.choice((0, 3))
-    elif nape:
-        profile, width, length, variant = HACKLE, 0.34, size * 1.35, 0
-    else:
-        profile, width, length = (SMALL if size < 0.08 else CONTOUR), rng.uniform(0.58, 0.7), size
-        variant = rng.choice((0, 2, 2)) if normal.y < -0.2 else rng.choice((0, 0, 3))
-    lift = rng.uniform(0.1, 0.2)
-    direction = flow * math.cos(lift) + normal * math.sin(lift)
-    piece = feather(frame(location + normal * 0.004, direction, normal), length, length * width, profile,
-                    curl=rng.uniform(-0.18, -0.08), ridge=0.004 + 0.02 * size, variant=variant, twist=jitter(0.15))
-    coat.add(piece, tint=coat_tint(location, normal), weights=weigh(location, COAT_BONES, 2))
-batch_build(coat)
+for side, _ in SIDES:
+    s = side
+    # The great horns sweep back from the brow bosses in one long, slightly outward curve.
+    horn_piece([(0.14 * s, 0.04, 0.15), (0.19 * s, 0.28, 0.25), (0.25 * s, 0.54, 0.29), (0.3 * s, 0.8, 0.26),
+                (0.34 * s, 1.02, 0.17), (0.36 * s, 1.2, 0.04)], 0.09, ring=14)
+    horn_piece([(0.18 * s, -0.14, 0.17), (0.2 * s, -0.05, 0.23), (0.21 * s, 0.02, 0.26)], 0.022, ring=8)
+    for k, (y, length) in enumerate(((0.0, 0.2), (0.12, 0.16))):
+        base = Vector((0.25 * s, y, -0.035 - 0.015 * k))
+        direction = Vector((0.45 * s, 1.0, -0.25)).normalized()
+        horn_piece([base, base + direction * length * 0.5 + Vector((0, 0, 0.01)), base + direction * length], 0.03, ring=8)
+    base = Vector((0.18 * s, -0.08, -0.17))
+    horn_piece([base, base + Vector((0.05 * s, 0.07, -0.05)), base + Vector((0.07 * s, 0.14, -0.08))], 0.026, owner="jaw", ring=8)
+for k in range(4):
+    y = -0.06 + 0.09 * k
+    base = Vector((0, y, 0.17 + 0.02 * smooth(-0.16, 0.2, y)))
+    h = 0.03 + 0.01 * k
+    horn_piece([base, base + Vector((0, 0.03, h * 0.6)), base + Vector((0, 0.06, h))], 0.022, ring=8)
+head_objects.append(build(horns))
+
+nostrils = shapes.Batch("Dragon | Nostrils", nostril)
+eyes = shapes.Batch("Dragon | Eyes", eye_mat)
+lids = shapes.Batch("Dragon | Eyelids", face)
+skull_tree = BVHTree.FromPolygons([v.co for v in skull.data.vertices], [p.vertices for p in skull.data.polygons])
+for side, tag in SIDES:
+    spot, normal = skull_tree.find_nearest(Vector((0.093 * side, -0.79, 0.06)))[:2]
+    nostrils.add(ellipsoid(spot - normal * 0.006, (0.013, 0.024, 0.009), Vector((0, 0, 1)).rotation_difference(normal).to_matrix()
+                           @ Matrix.Rotation(0.5 * side, 3, "Z"), 10, 6), weights={"head": 1.0})
+    centre = Vector((EYE_LOCAL.x * side, EYE_LOCAL.y, EYE_LOCAL.z))
+    gaze = Vector((0.72 * side, -0.68, 0.06)).normalized()
+    up = (Vector((0, 0, 1)) - gaze * gaze.z).normalized()
+    axes = Matrix((up, gaze.cross(up), gaze)).transposed()   # local X = up, so the slit pupil stands upright
+    eyes.add(ellipsoid(centre, (0.054, 0.054, 0.05), axes, segments=24, rings=16), weights={"head": 1.0})
+    brow = up.copy()
+    brow.rotate(Matrix.Rotation(0.25 * side, 3, gaze))   # the lid drops towards the snout: a hard, level glare
+    lids.add(eyelid(centre, 0.054, brow, math.radians(70), 0.004), weights={f"lid.{tag}": 1.0})
+    lids.add(eyelid(centre, 0.054, -up, math.radians(66), 0.0035), weights={"head": 1.0})
+head_objects += [build(nostrils), build(eyes), build(lids)]
+for obj in (skull, jaw):
+    shapes.assign_weights(obj, [{"head" if obj is skull else "jaw": 1.0}] * len(obj.data.vertices))
+    skinned.append(obj)
+for obj in head_objects:
+    if obj:
+        obj.data.transform(HEAD_M)
+
+HEAD_AXIS = (HEAD_M @ Vector((0, 0.25, 0)), HEAD_M @ Vector((0, -0.95, 0)))
 
 
-# ---------------------------------------------------------------- wings
-# Built for the right wing in wing space (X out along the span, Y back along the chord, Z up),
-# then mirrored. Flight feathers each get a bone so the fan can close when the wing folds.
-
-def on_arm(x):
-    if x <= ELBOW.x:
-        return Vector((0, 0, 0)).lerp(ELBOW, x / ELBOW.x)
-    if x <= WRIST.x:
-        return ELBOW.lerp(WRIST, (x - ELBOW.x) / (WRIST.x - ELBOW.x))
-    return WRIST.lerp(TIP, min((x - WRIST.x) / (TIP.x - WRIST.x), 1.0))
+def head_body(p):
+    a, b = HEAD_AXIS
+    tangent = (b - a).normalized()
+    up = (Vector((0, 0, 1)) - tangent * tangent.z).normalized()
+    offset = p - a
+    offset -= tangent * offset.dot(tangent)
+    around = math.atan2(offset.dot(tangent.cross(up)), offset.dot(up)) / math.pi
+    return ((p - a).dot(tangent), abs(around), 0.55)
 
 
-def arm_radius(x):
-    return 0.1 + (0.045 - 0.1) * min(x / WRIST.x, 1.0) if x <= WRIST.x else 0.045 - 0.025 * (x - WRIST.x) / (TIP.x - WRIST.x)
+for obj in head_objects:
+    if obj and obj.data.materials[0] is face:
+        shapes.set_attribute(obj, "Body", head_body)
 
 
-def segment(x):
-    return "up" if x < ELBOW.x else "fore" if x < WRIST.x else "hand"
+# ---------------------------------------------------------------- wings: arm, thumb, fingers, membrane
+
+def body_edge_world():
+    return [Vector(p) for p in ((0.42, -0.72, 2.12), (0.56, -0.28, 2.02), (0.6, 0.25, 1.92), (0.62, 0.62, 1.74))]
 
 
-wing = {tag: shapes.Batch(f"Griffon | Wing {tag}", plumes) for _, tag in SIDES}
-flesh = {tag: shapes.Batch(f"Griffon | Wing arm {tag}", wing_flesh) for _, tag in SIDES}
-FEATHER_BONES = []   # (name without side, wing-space root, rest angle in degrees, parent segment)
-# Small coverts ride a few group bones along the leading edge, which swing them back when folding.
-COVERT_GROUPS = [(f"cov{i + 1}", x, segment) for i, (x, segment) in enumerate(
-    [(0.14, "up"), (0.4, "up")] + [(ELBOW.x + 0.06 + (WRIST.x - ELBOW.x - 0.12) * k / 4, "fore") for k in range(5)])]
+WS_INV = WS.inverted()
 
 
-def covert_bone(x):
-    seg = "up" if x < ELBOW.x else "fore"
-    return min((g for g in COVERT_GROUPS if g[2] == seg), key=lambda g: abs(g[1] - x))[0]
+def on_flank(point):
+    spot, normal = trunk_tree.find_nearest(point)[:2]
+    return spot + normal * 0.02
 
 
-def add_wing(piece, tint, bone_for):
-    """Add a wing-space piece to both wings. bone_for(tag) -> weights dict."""
+BODY_EDGE = [WS_INV @ on_flank(p) for p in body_edge_world()]   # in wing space, just outside the flank
+ARM_PATH = [Vector((0, 0, 0)), ELBOW, WRIST]
+FINGER_ORDER = ["d2", "d3", "d4", "d5"]
+
+
+def segment_weights(name, u, tag):
+    """Weights along a finger at fraction u of its length, blending across the knuckles."""
+    lengths = FINGERS[name][1]
+    total = sum(lengths)
+    marks = [0.0, lengths[0] / total, (lengths[0] + lengths[1]) / total, 1.0]
+    weights = {}
+    for k in range(3):
+        centre = (marks[k] + marks[k + 1]) / 2
+        half = (marks[k + 1] - marks[k]) / 2 + 0.05
+        w = max(0.0, 1 - abs(u - centre) / half)
+        if w > 0:
+            weights[f"{name}_{k + 1}.{tag}"] = w
+    total = sum(weights.values())
+    return {k: v / total for k, v in weights.items()}
+
+
+def arm_weights(v_along, tag):
+    """Weights at fraction v_along of the arm path from the wrist (0) back to the shoulder (1)."""
+    split = (WRIST - ELBOW).length / ((WRIST - ELBOW).length + ELBOW.length)
+    if v_along < split - 0.06:
+        return {f"wfore.{tag}": 1.0}
+    if v_along > split + 0.06:
+        return {f"wup.{tag}": 0.7, "chest": 0.3} if v_along > 0.9 else {f"wup.{tag}": 1.0}
+    w = (v_along - (split - 0.06)) / 0.12
+    return {f"wfore.{tag}": 1 - w, f"wup.{tag}": w}
+
+
+def combine(parts, limit=4):
+    total = {}
+    for weight, weights in parts:
+        for k, v in weights.items():
+            total[k] = total.get(k, 0.0) + weight * v
+    best = sorted(total.items(), key=lambda kv: -kv[1])[:limit]
+    norm = sum(v for k, v in best) or 1.0
+    return {k: v / norm for k, v in best if v / norm > 0.01}
+
+
+def catenary(p, q, sag, toward):
+    """A trailing edge scalloped between two attachment points, drawn in towards `toward`."""
+    def at(t):
+        base = p.lerp(q, t)
+        pull = (toward - base)
+        pull.z = 0
+        return base + pull.normalized() * sag * math.sin(math.pi * t) * (q - p).length
+    return at
+
+
+def billow(depth):
+    return lambda u, v: Vector((0, 0, -depth * math.sin(math.pi * min(u * 1.1, 1.0)) * math.sin(math.pi * v)))
+
+
+panels = []   # (piece in wing space, weights per vertex as function(tag) -> list, tints)
+tips = {name: FINGER_POINTS[name][-1] for name in FINGERS}
+for a, b in zip(FINGER_ORDER, FINGER_ORDER[1:]):
+    fa, fb = shapes.polyline(FINGER_POINTS[a]), shapes.polyline(FINGER_POINTS[b])
+    edge = catenary(tips[a], tips[b], 0.2, WRIST)
+    piece = shapes.coons_patch(fa, fb, lambda v: WRIST.copy(), edge, 22, 12, billow(0.07 * (tips[a] - tips[b]).length))
+    panels.append((piece, lambda tag, a=a, b=b, piece=piece: [
+        combine([(1 - uv[1], segment_weights(a, uv[0], tag)), (uv[1], segment_weights(b, uv[0], tag))])
+        for uv in [(i / 22, j / 12) for j in range(13) for i in range(23)]]))
+
+d5, edge_body = shapes.polyline(FINGER_POINTS["d5"]), shapes.polyline(BODY_EDGE)
+arm_back = shapes.polyline([WRIST, ELBOW, Vector((0, 0, 0))])
+trailing = catenary(tips["d5"], BODY_EDGE[-1], 0.16, (ELBOW + BODY_EDGE[1]) / 2)
+body_patch = shapes.coons_patch(d5, edge_body, arm_back, trailing, 22, 16, billow(0.12))
+BODY_EDGE_BONES = ["chest", "spine2", "spine1", "pelvis", "thigh.{tag}"]
+panels.append((body_patch, lambda tag: [
+    combine([((1 - v) ** 3, segment_weights("d5", u, tag)),
+             (v ** 3, weigh(wing_world(edge_body(u), 1 if tag == "R" else -1),
+                            [n.format(tag=tag) for n in BODY_EDGE_BONES], 2)),
+             ((1 - u) ** 3, arm_weights(v, tag)),
+             (max(0.0, 1 - (1 - v) ** 3 - v ** 3 - (1 - u) ** 3), {f"panel_skin.{tag}": 1.0})])
+    for v, u in [(j / 16, i / 22) for j in range(17) for i in range(23)]]))
+
+front_edge = shapes.polyline([Vector((0.05, -0.32, 0.04)), WRIST * 0.55 + Vector((0, -0.28, 0.03)), WRIST])
+arm_front = shapes.polyline([Vector((0, 0, 0)), ELBOW, WRIST])
+pro_patch = shapes.coons_patch(arm_front, front_edge, shapes.polyline([Vector((0, 0, 0)), Vector((0.05, -0.32, 0.04))]),
+                               lambda v: WRIST.copy(), 16, 3)
+panels.append((pro_patch, lambda tag: [combine([((1 - j / 3) ** 2, arm_weights(1 - i / 16, tag)),
+                                                  (1 - (1 - j / 3) ** 2, {f"pro_skin.{tag}": 1.0})])
+                                        for j in range(4) for i in range(17)]))
+
+
+def membrane_tint(point):
+    """Darker by the bones and body, brighter and warmer where the membrane is thinnest."""
+    nearest = min((point - p).length for name in FINGERS for p in FINGER_POINTS[name])
+    root = smooth(0.0, 3.0, (point - WRIST).length)
+    thin = smooth(0.05, 0.6, nearest)
+    colour = lerp((0.08, 0.005, 0.007), (0.28, 0.026, 0.015), thin)
+    return lerp(colour, (0.5, 0.09, 0.018), 0.32 * thin * root)
+
+
+wing_batches = {tag: shapes.Batch(f"Dragon | Membrane {tag}", membrane) for _, tag in SIDES}
+for piece, weights_for in panels:
+    world = piece.transformed(WS)
+    tints = [membrane_tint(Vector(v)) for v in piece.verts]
+    for side, tag in SIDES:
+        wing_batches[tag].add(world if side > 0 else world.mirrored(), tint=None, weights=weights_for(tag))
+        start = len(wing_batches[tag].tints) - len(piece.verts)
+        wing_batches[tag].tints[start:] = tints
+for batch in wing_batches.values():
+    build(batch)
+
+bones_batch = {tag: shapes.Batch(f"Dragon | Wing bones {tag}", hide) for _, tag in SIDES}
+claw_batch = {tag: shapes.Batch(f"Dragon | Wing claws {tag}", claws) for _, tag in SIDES}
+WING_BODY = (0.0, 0.45, 0.42)
+
+
+def add_wing_piece(batches, piece, names, body=None, influences=2, power=8.0):
     world = piece.transformed(WS)
     for side, tag in SIDES:
-        wing[tag].add(world if side == 1 else world.mirrored(), tint=tint, weights=bone_for(tag))
+        oriented = world if side > 0 else world.mirrored()
+        batches[tag].add(oriented, weights=[weigh(v, [n.format(tag=tag) for n in names], influences, power)
+                                            for v in oriented.verts], body=body)
 
 
-def wing_feather(x, angle, length, width, lift, tint, profile=CONTOUR, curl=-0.06, roll=0.0, back=0.0,
-                 variant=0, sweep=0.0, bone_name=None, twist=0.0, covert=False):
-    root = on_arm(x) + Vector((0, 0.03 + back, lift))
-    local = Matrix.Translation(root) @ Matrix.Rotation(math.radians(angle), 4, "Z") @ Matrix.Rotation(roll, 4, "X") \
-        @ Matrix.Rotation(-0.03, 4, "Y")
-    piece = feather(local, length, width, profile, curl=curl, variant=variant, sweep=sweep, twist=twist,
-                    ridge=0.006 + 0.008 * length)
-    world_root = WS @ root
-    if covert and x <= WRIST.x:
-        bone_name = covert_bone(x)
-    if bone_name:
-        def weights(tag):
-            return {f"{bone_name}.{tag}": 1.0}
-    else:
-        def weights(tag):
-            point = world_root if tag == "R" else MIRROR.to_3x3() @ world_root
-            # Feathers are rigid: one bone each, so large folds never shear them.
-            return weigh(point, [f"{n}.{tag}" for n in ("up", "fore", "hand")], 1)
-    add_wing(piece, tint, weights)
-    return root
-
-
-def wing_tint(base, amount=0.0):
-    return tuple(c * (1 + amount) for c in base)
-
-
-# Primaries: ten, the outer six notched into "fingers" that spread and turn up at the tips.
-PRIMARY_LENGTHS = (1.0, 1.07, 1.15, 1.24, 1.32, 1.37, 1.38, 1.33, 1.21, 1.02)
-for i, length in enumerate(PRIMARY_LENGTHS):
-    t = i / 9
-    x = WRIST.x + 0.02 + (TIP.x - WRIST.x - 0.06) * (t ** 0.85)
-    angle = 76 - 68 * t + jitter(1.5)
-    name = f"pri{i + 1}"
-    root = wing_feather(x, angle, length * rng.uniform(0.98, 1.02), 0.19 - 0.05 * t, 0.012 * i - 0.025,
-                        wing_tint((0.105, 0.068, 0.04), 0.25 * (1 - t) + jitter(0.05)),
-                        EMARGINATED if i >= 4 else PRIMARY, curl=0.03 + 0.05 * t if i >= 4 else -0.03,
-                        roll=0.14 + 0.06 * t, variant=rng.choice((0, 1)), sweep=-0.02 * t, bone_name=name, twist=0.08 * t)
-    FEATHER_BONES.append((name, root, angle, "hand"))
-
-# Secondaries: broad, blunt and slightly scalloped along the trailing edge.
-for i in range(15):
-    t = i / 14
-    x = ELBOW.x - 0.04 + (WRIST.x - ELBOW.x + 0.02) * t
-    angle = 97 - 15 * t + jitter(1.2)
-    name = f"sec{i + 1}"
-    root = wing_feather(x, angle, (1.0 - 0.06 * t) * rng.uniform(0.97, 1.03), 0.2, -0.012 + 0.0045 * i,
-                        wing_tint((0.2, 0.125, 0.06), -0.12 * t + jitter(0.06)), SECONDARY, curl=-0.05,
-                        roll=0.12, variant=rng.choice((1, 1, 0)), bone_name=name)
-    FEATHER_BONES.append((name, root, angle, "fore"))
-
-# Tertials lie over the elbow on the upper arm, each on its own bone so they lie flat when folded.
-for i in range(4):
-    t = i / 3
-    angle = 106 - 4 * t + jitter(2)
-    name = f"ter{i + 1}"
-    root = wing_feather(0.1 + 0.36 * t, angle, 0.92 - 0.06 * t, 0.2, 0.04 - 0.008 * i,
-                        wing_tint((0.32, 0.2, 0.09), jitter(0.06)), SECONDARY, curl=-0.06, roll=0.1,
-                        variant=rng.choice((1, 3)), bone_name=name)
-    FEATHER_BONES.append((name, root, angle, "up"))
-
-# Greater and median coverts over each secondary, and primary coverts over the hand; they share
-# their flight feather's bone so coverts and flight feathers close together.
-for name, root, angle, parent in list(FEATHER_BONES):
-    if parent == "up" or name == "alula":
-        continue
-    index = int(name[3:]) - 1
-    if parent == "fore":
-        x = ELBOW.x - 0.04 + (WRIST.x - ELBOW.x + 0.02) * index / 14
-        wing_feather(x, angle + 2, rng.uniform(0.44, 0.5) - 0.04 * index / 14, 0.18, 0.04 + 0.002 * index,
-                     wing_tint((0.44, 0.28, 0.11), jitter(0.06)), CONTOUR, curl=-0.1, roll=0.1, back=0.005,
-                     variant=rng.choice((0, 2)), bone_name=name)
-        wing_feather(x, angle + 8, rng.uniform(0.24, 0.29), 0.16, 0.065, wing_tint((0.6, 0.4, 0.15), jitter(0.06)),
-                     CONTOUR, curl=-0.14, roll=0.08, back=-0.04, variant=rng.choice((0, 2)), bone_name=name)
-    else:
-        t = index / 9
-        x = WRIST.x + 0.02 + (TIP.x - WRIST.x - 0.06) * (t ** 0.85)
-        wing_feather(x, angle + 4, 0.5 - 0.2 * t, 0.16, 0.05, wing_tint((0.3, 0.19, 0.08), jitter(0.05)),
-                     CONTOUR, curl=-0.08, roll=0.1, variant=rng.choice((0, 2)), bone_name=name)
-
-# Lesser coverts point back and slightly towards the body, in loose overlapping rows.
-for row, (length, lift, back, count) in enumerate(((0.2, 0.085, -0.075, 20), (0.15, 0.098, -0.1, 17), (0.11, 0.108, -0.12, 14))):
-    for i in range(count):
-        t = (i + rng.uniform(-0.3, 0.3)) / (count - 1)
-        x = 0.06 + (WRIST.x - 0.06) * max(0.0, min(1.0, t))
-        wing_feather(x, 118 - 6 * t + jitter(5), length * rng.uniform(0.9, 1.1), 0.15 - 0.02 * row, lift,
-                     wing_tint((0.72, 0.5, 0.19), jitter(0.07)), SMALL, curl=-0.2, back=back, variant=rng.choice((0, 2)),
-                     covert=True)
-
-# Underwing coverts, paler, hide the arm from below.
-for row, (length, lift, back) in enumerate(((0.38, -0.04, 0.0), (0.24, -0.06, -0.05))):
-    for i in range(16):
-        t = i / 15
-        wing_feather(0.06 + (WRIST.x - 0.06) * t, 104 - 18 * t + jitter(3), length * rng.uniform(0.92, 1.08), 0.16, lift,
-                     wing_tint((0.66, 0.5, 0.29), jitter(0.06)), SMALL if row else CONTOUR, curl=0.14, roll=math.pi,
-                     back=back, variant=0, covert=True)
-
-# Marginal coverts wrap the leading edge from the shoulder past the wrist.
-for i in range(30):
-    x = 0.05 + (WRIST.x + 0.42) * i / 29 + jitter(0.01)
-    centre, radius = on_arm(x), arm_radius(x) + 0.01
-    for theta in (-1.0, -0.35, 0.3, 0.95):
-        theta += 0.25 * (i % 2) + jitter(0.08)
-        outward = Vector((0, -math.cos(theta), math.sin(theta)))
-        flow = Vector((-0.25, 0.7 + 0.3 * math.sin(abs(theta)), math.copysign(math.cos(theta), theta)))
-        piece = feather(frame(centre + outward * radius, flow, outward), 0.13 * rng.uniform(0.9, 1.15), 0.085, SMALL,
-                        curl=-0.25, ridge=0.003, variant=0)
-        owner = covert_bone(x) if x < WRIST.x else "hand"
-        add_wing(piece, wing_tint((0.74, 0.54, 0.24), jitter(0.06)), lambda tag, o=owner: {f"{o}.{tag}": 1.0})
-
-# The alula: a little thumb of stiff feathers at the wrist, folding back on its own bone.
-for i in range(4):
-    root = wing_feather(WRIST.x - 0.02 + 0.03 * i, -12 + 8 * i, 0.3 - 0.04 * i, 0.08, 0.05 + 0.004 * i,
-                        wing_tint((0.28, 0.17, 0.07), jitter(0.05)), CONTOUR, curl=0.02, roll=0.1, back=-0.07,
-                        bone_name="alula")
-FEATHER_BONES.append(("alula", root, 0.0, "hand"))
-
-# The arm itself, under the coverts: smooth through the elbow and wrist by skin weights.
-arm_piece = loft([((-0.14, 0, 0), 0, 0), ((-0.07, 0, 0), 0.085, 0.075), ((0, 0, 0), 0.1, 0.085), (ELBOW * 0.5, 0.08, 0.068),
-                  (ELBOW, 0.066, 0.056), (ELBOW.lerp(WRIST, 0.5), 0.055, 0.048), (WRIST, 0.048, 0.044),
-                  (WRIST.lerp(TIP, 0.5), 0.036, 0.03), (TIP, 0.02, 0.016), (TIP + Vector((0.06, 0.02, 0)), 0, 0)], ring=12)
-arm_world = arm_piece.transformed(WS)
-for side, tag in SIDES:
-    piece = arm_world if side == 1 else arm_world.mirrored()
-    names = [f"up.{tag}", f"fore.{tag}", f"hand.{tag}", "chest"]
-    flesh[tag].add(piece, weights=[weigh(v, names, 2, 5.0) for v in piece.verts])
-
-# Scapulars: long body feathers that cover the wing root and lie back along the spine.
-scapular = shapes.Batch("Griffon | Scapulars", plumes)
-for i in range(16):
-    side = 1 if i % 2 == 0 else -1
-    k = i // 2
-    root = Vector((side * (0.12 + 0.03 * (k % 3) + jitter(0.015)), -0.42 + 0.06 * k + jitter(0.02), 1.47 - 0.01 * k))
-    direction = Vector((side * 0.15, 1.0, -0.25 - 0.02 * k)).normalized()
-    up = Vector((side * 0.3, 0, 1)).normalized()
-    length = rng.uniform(0.34, 0.46) - 0.01 * k
-    scapular.add(feather(frame(root, direction, up), length, length * 0.42, CONTOUR, curl=-0.1, ridge=0.01,
-                         variant=rng.choice((0, 3))),
-                 tint=lerp(BRONZE, (0.36, 0.22, 0.08), rng.random()), weights={"chest": 1.0})
-
-for batch in list(wing.values()) + list(flesh.values()) + [scapular]:
-    batch_build(batch)
-
-for side, tag in SIDES:
-    for name, x, parent in COVERT_GROUPS:
-        head, tail = WS @ on_arm(x), WS @ (on_arm(x) + Vector((0, 0.15, 0)))
-        if side < 0:
-            head, tail = MIRROR.to_3x3() @ head, MIRROR.to_3x3() @ tail
-        bone(f"{name}.{tag}", head, tail, f"{parent}.{tag}")
-    for name, root, angle, parent in FEATHER_BONES:
-        head = WS @ root
-        tail = WS @ (root + Vector((math.cos(math.radians(angle)), math.sin(math.radians(angle)), 0)) * 0.25)
-        if side < 0:
-            head, tail = MIRROR.to_3x3() @ head, MIRROR.to_3x3() @ tail
-        bone(f"{name}.{tag}", head, tail, f"{parent}.{tag}")
+arm = loft([((-0.18, 0.02, -0.02), 0, 0), ((-0.1, 0.02, -0.02), 0.16, 0.15), ((0, 0, 0), 0.19, 0.17),
+            (ELBOW * 0.5, 0.15, 0.13), (ELBOW, 0.115, 0.1), (ELBOW.lerp(WRIST, 0.35), 0.1, 0.085),
+            (ELBOW.lerp(WRIST, 0.8), 0.08, 0.07), (WRIST, 0.095, 0.085), (WRIST + Vector((0.08, 0.0, 0.0)), 0, 0)], ring=14)
+add_wing_piece(bones_batch, arm, ["wup.{tag}", "wfore.{tag}", "chest"], WING_BODY)
+for name, points in FINGER_POINTS.items():
+    pts = []
+    for k, p in enumerate(points):
+        r = 0.07 - 0.016 * k
+        pts.append((p, r * 1.15, r))
+        if k < 3:
+            pts.append((p.lerp(points[k + 1], 0.5), r * 0.75, r * 0.65))
+    pts[-1] = (pts[-1][0], 0.016, 0.014)
+    pts.append((points[-1] + (points[-1] - points[-2]).normalized() * 0.08, 0, 0))
+    add_wing_piece(bones_batch, loft(pts, ring=10), [f"{name}_{k}.{{tag}}" for k in (1, 2, 3)] + ["wfore.{tag}"], WING_BODY)
+thumb_dir = Vector((0.3, -1.0, 0.25)).normalized()
+thumb_base = WRIST + Vector((0.0, -0.06, 0.04))
+thumb = loft([(thumb_base, 0.06, 0.055), (thumb_base + thumb_dir * 0.12, 0.05, 0.045), (thumb_base + thumb_dir * 0.2, 0.045, 0.04)], ring=10)
+add_wing_piece(bones_batch, thumb, ["wfore.{tag}"], WING_BODY, 1)
+thumb_claw, thumb_values = claw(thumb_base + thumb_dir * 0.2, thumb_dir, 1.4, drop=0.12)
+add_wing_piece(claw_batch, thumb_claw, ["wfore.{tag}"], thumb_values, 1)
+for batch in list(bones_batch.values()) + list(claw_batch.values()):
+    build(batch)
 
 
 # ---------------------------------------------------------------- rig
 
 bpy.ops.object.armature_add(location=(0, 0, 0))
 rig = bpy.context.object
-rig.name = "Griffon | Rig"
-rig.data.name = "Griffon rig"
+rig.name = "Dragon | Rig"
+rig.data.name = "Dragon rig"
 bpy.ops.object.mode_set(mode="EDIT")
 edit = rig.data.edit_bones
 edit.remove(edit[0])
@@ -660,102 +720,203 @@ for name, (head, tail, parent) in BONES.items():
 bpy.ops.object.mode_set(mode="OBJECT")
 for obj in skinned:
     shapes.skin_to(obj, rig)
+REST = {name: rig.data.bones[name].matrix_local.copy() for name in BONES}
 
 
-# ---------------------------------------------------------------- animation
+# ---------------------------------------------------------------- animation: FK deltas, two-bone IK, keys
 
 AXES = {"X": Vector((1, 0, 0)), "Y": Vector((0, 1, 0)), "Z": Vector((0, 0, 1))}
 
 
 def about(pivot, axis, angle):
     pivot = Vector(pivot)
-    return Matrix.Translation(pivot) @ Matrix.Rotation(angle, 4, AXES[axis] if isinstance(axis, str) else axis) @ Matrix.Translation(-pivot)
+    axis = AXES[axis] if isinstance(axis, str) else axis
+    return Matrix.Translation(pivot) @ Matrix.Rotation(angle, 4, axis) @ Matrix.Translation(-pivot)
 
 
 def head_of(name):
     return BONES[name][0]
 
 
-def wing_angles():
-    """Planar fold targets (degrees about the wing normal) from the wing's own geometry."""
-    deg = lambda v: math.degrees(math.atan2(v.y, v.x))
-    humerus = 76 - deg(ELBOW)
-    forearm_total = -96 - deg(WRIST - ELBOW)
-    hand_total = 86 - deg(TIP - WRIST)
-    feathers = {}
-    for name, root, angle, parent in FEATHER_BONES:
-        if name == "alula":
-            feathers[name] = (95 - angle - hand_total, 0.02)
-            continue
-        number = int(name[3:])
-        if parent == "up":
-            target, total, stack = 104 - number, humerus, 0.08 + 0.006 * number
-        elif parent == "fore":
-            target, total, stack = 99 - 0.6 * number, forearm_total, 0.0045 * (16 - number)
-        else:
-            target, total, stack = 92 - 0.5 * number, hand_total, -0.035 - 0.0035 * number
-        feathers[name] = (target - angle - total, stack)
-    for name, x, parent in COVERT_GROUPS:
-        feathers[name] = (-58 if parent == "up" else 62, 0.03)
-    return humerus, forearm_total - humerus, hand_total - forearm_total, feathers
+def chain(names, axis, angles):
+    return {n: about(head_of(n), axis, a) for n, a in zip(names, angles)}
 
 
-HUMERUS, FOREARM, HAND, FEATHERS = wing_angles()
+def frame(direction, normal):
+    d = direction.normalized()
+    n = (normal - d * normal.dot(d)).normalized()
+    return Matrix((d, n.cross(d), n)).transposed()
 
 
-def right_wing(fold, lower, flap, hand_flap):
-    """Deltas for the right wing: fold (0-1) closes it in its own plane, lower (radians) swings the
-    folded wing down onto the body, flap raises it about the body's long axis."""
-    s, e, w = WS @ Vector((0, 0, 0)), WS @ ELBOW, WS @ WRIST
-    rad = math.radians
-    deltas = {
-        "up": about(s, "Y", -flap) @ about(s, "Y", lower) @ about(s, NORMAL, rad(HUMERUS) * fold),
-        "fore": about(e, NORMAL, rad(FOREARM) * fold),
-        "hand": about(w, "Y", -hand_flap) @ about(w, NORMAL, rad(HAND) * fold),
-    }
-    pivots = [(n, WS @ r) for n, r, a, p in FEATHER_BONES] + [(n, WS @ on_arm(x)) for n, x, p in COVERT_GROUPS]
-    for name, pivot in pivots:
-        turn, stack = FEATHERS[name]
-        deltas[name] = Matrix.Translation(NORMAL * stack * fold) @ about(pivot, NORMAL, rad(turn) * fold)
+def turn_onto(rest_dir, target_dir, target_normal):
+    """The rotation carrying a rest wing bone (lying in the wing plane) onto a folded direction,
+    with the wing's upper surface turned towards target_normal."""
+    return (frame(target_dir, target_normal) @ frame(rest_dir, NORMAL).transposed()).to_quaternion()
+
+
+# The folded right wing, in body space: the elbow tucked back and high, the wrist forward at the
+# base of the neck, the fingers lying back and down along the flank with the membrane between them.
+W_SHOULDER, W_ELBOW, W_WRIST = WS @ Vector((0, 0, 0)), WS @ ELBOW, WS @ WRIST
+FOLD_ELBOW = Vector((0.64, 0.06, 2.42))
+FOLD_WRIST = Vector((0.74, -1.46, 2.28))
+FOLD_TIPS = {"d2": Vector((1.0, 1.85, 1.62)), "d3": Vector((0.97, 1.95, 1.4)),
+             "d4": Vector((1.0, 1.5, 1.2)), "d5": Vector((1.0, 0.8, 1.12))}
+FOLD_IN = Vector((-1, 0, -0.3))   # the folded membrane's upper surface faces the flank, so it hangs below the arm
+FOLD_TURN = {"wup": turn_onto(W_ELBOW - W_SHOULDER, FOLD_ELBOW - W_SHOULDER, FOLD_IN),
+             "wfore": turn_onto(W_WRIST - W_ELBOW, FOLD_WRIST - FOLD_ELBOW, FOLD_IN)}
+for _name in FINGERS:
+    FOLD_TURN[_name] = turn_onto(WS @ FINGER_POINTS[_name][-1] - W_WRIST, FOLD_TIPS[_name] - FOLD_WRIST, FOLD_IN)
+
+
+def right_wing(fold=0.0, lower=0.0, flap=0.0, tip_flap=0.0, spread=0.0, curl=0.0):
+    """Wing deltas: fold (0-1) turns each wing bone from its spread rest towards the folded pose,
+    lower swings the whole wing down about the body's long axis, flap raises it, tip_flap lags the
+    hand behind, spread fans the fingers, curl flexes their joints."""
+    s, e, w = W_SHOULDER, W_ELBOW, W_WRIST
+    turn = lambda name, pivot, at: Matrix.Translation(at) @ Quaternion().slerp(FOLD_TURN[name], fold).to_matrix().to_4x4() @ Matrix.Translation(-pivot)
+    swing = about(s, "Y", lower - flap)
+    upper = turn("wup", s, s)
+    fore = turn("wfore", e, upper @ e)
+    absolute = {"wup": swing @ upper, "wfore": swing @ fore}
+    deltas = {"wup": absolute["wup"], "wfore": absolute["wup"].inverted() @ absolute["wfore"]}
+    chord = (WS.to_3x3() @ Vector((0, 1, 0))).normalized()
+    for k, name in enumerate(FINGER_ORDER):
+        fan = spread * (k - 1.5) * 0.08
+        finger = swing @ turn(name, w, fore @ w)
+        deltas[f"{name}_1"] = absolute["wfore"].inverted() @ finger @ about(w, chord, -tip_flap) @ about(w, NORMAL, fan)
+        for j in (2, 3):
+            joint = WS @ FINGER_POINTS[name][j - 1]
+            deltas[f"{name}_{j}"] = about(joint, NORMAL, curl * 0.12) @ about(joint, chord, -tip_flap * 0.35)
     return deltas
 
 
-def wings(fold=0.0, lower=0.0, flap=0.0, hand_flap=0.0):
+def wings(**kwargs):
     deltas = {}
-    for name, delta in right_wing(fold, lower, flap, hand_flap).items():
+    for name, delta in right_wing(**kwargs).items():
         deltas[f"{name}.R"] = delta
         deltas[f"{name}.L"] = MIRROR @ delta @ MIRROR
     return deltas
 
 
-def chain(names, axis, angles):
-    return {n: about(head_of(n), axis, a) for n, a in zip(names, angles)}
+ORDER = list(BONES)
+LEGS = []   # (upper, lower, end, extra child or None)
+for _, tag in SIDES:
+    LEGS += [(f"upperarm.{tag}", f"forearm.{tag}", f"hand.{tag}", None), (f"thigh.{tag}", f"shin.{tag}", f"foot.{tag}", f"toes.{tag}")]
 
 
-NECK = ["neck1", "neck2", "neck3"]
-TAILS = [f"tail{i}" for i in range(1, 6)]
-
-
-def key_pose(frame_number, deltas):
-    for name in BONES:
+def solve(deltas, ik=True, plant=None):
+    """Armature-space pose matrices from FK deltas, then two-bone IK keeping each foot planted."""
+    poses = {}
+    for name in ORDER:
+        parent = BONES[name][2]
         delta = deltas.get(name, Matrix.Identity(4))
-        rest = rig.data.bones[name].matrix_local
-        basis = rest.inverted() @ delta @ rest
+        poses[name] = (poses[parent] @ REST[parent].inverted() @ delta @ REST[name]) if parent else delta @ REST[name]
+    if not ik:
+        return poses
+    for upper, lower, end, child in LEGS:
+        hip = poses[upper].translation
+        target = (plant or {}).get(end, REST[end].translation)
+        l1 = (REST[lower].translation - REST[upper].translation).length
+        l2 = (REST[end].translation - REST[lower].translation).length
+        reach = target - hip
+        d = max(abs(l1 - l2) + 1e-3, min(l1 + l2 - 1e-3, reach.length))
+        n = reach.normalized()
+        rest_hip, rest_knee, rest_end = REST[upper].translation, REST[lower].translation, REST[end].translation
+        pole = rest_knee - (rest_hip + (rest_end - rest_hip).normalized() * (rest_knee - rest_hip).dot((rest_end - rest_hip).normalized()))
+        parent_rot = (poses[BONES[upper][2]] @ REST[BONES[upper][2]].inverted()).to_3x3()
+        pole = parent_rot @ pole
+        pole = (pole - n * pole.dot(n)).normalized()
+        a = (l1 * l1 - l2 * l2 + d * d) / (2 * d)
+        knee = hip + n * a + pole * math.sqrt(max(l1 * l1 - a * a, 0.0))
+        target = hip + n * d
+        for name, start, finish in ((upper, hip, knee), (lower, knee, target)):
+            current = poses[name].to_3x3() @ Vector((0, 1, 0))
+            if name == lower:
+                current = (poses[upper] @ REST[upper].inverted() @ REST[lower]).to_3x3() @ Vector((0, 1, 0))
+                base = (poses[upper] @ REST[upper].inverted() @ REST[lower]).to_3x3()
+            else:
+                base = poses[name].to_3x3()
+            turn = current.rotation_difference((finish - start).normalized()).to_matrix()
+            poses[name] = Matrix.Translation(start) @ (turn @ base).to_4x4()
+        rotation = REST[end].to_3x3().to_4x4()
+        poses[end] = Matrix.Translation(target) @ rotation
+        if child:
+            poses[child] = poses[end] @ REST[end].inverted() @ REST[child]
+    return poses
+
+
+def key(frame, poses):
+    for name in ORDER:
+        parent = BONES[name][2]
+        local = REST[parent].inverted() @ REST[name] if parent else REST[name]
+        relative = poses[parent].inverted() @ poses[name] if parent else poses[name]
+        basis = local.inverted() @ relative
+        location, rotation, scale = basis.decompose()
         pose_bone = rig.pose.bones[name]
         pose_bone.rotation_mode = "QUATERNION"
-        pose_bone.rotation_quaternion = basis.to_quaternion()
-        pose_bone.location = basis.translation
-        pose_bone.keyframe_insert("rotation_quaternion", frame=frame_number)
-        pose_bone.keyframe_insert("location", frame=frame_number)
+        pose_bone.location, pose_bone.rotation_quaternion, pose_bone.scale = location, rotation, scale
+        for path in ("location", "rotation_quaternion", "scale"):
+            pose_bone.keyframe_insert(path, frame=frame)
 
 
-def clip(name, frames, pose, step=2):
+def motion(poses, name):
+    return poses[name] @ REST[name].inverted()
+
+
+def panel_samples(side, tag, kind):
+    """Points of a panel's border with the bone each one rides on."""
+    w = lambda p: wing_world(p, side)
+    if kind == "pro":
+        return [(w((0, 0, 0)), f"wup.{tag}"), (w(ELBOW * 0.5), f"wup.{tag}"), (w(ELBOW), f"wup.{tag}"),
+                (w(ELBOW.lerp(WRIST, 0.5)), f"wfore.{tag}"), (w(WRIST), f"wfore.{tag}")]
+    d5 = FINGER_POINTS["d5"]
+    samples = [(w(d5[k]), f"d5_{min(k, 2) + 1}.{tag}") for k in range(4)]
+    samples += [(w((0, 0, 0)), f"wup.{tag}"), (w(ELBOW), f"wup.{tag}"), (w(ELBOW.lerp(WRIST, 0.5)), f"wfore.{tag}")]
+    for p in BODY_EDGE:
+        world = w(p)
+        samples.append((world, min(("chest", "spine2", "spine1", "pelvis"), key=lambda n: abs(BONES[n][0].y - world.y))))
+    return samples
+
+
+PANEL_SAMPLES = {(kind, tag): panel_samples(side, tag, kind) for side, tag in SIDES for kind in ("panel", "pro")}
+
+
+def fit_panels(poses):
+    """Pose each panel bone pair so the panel interior follows the best affine fit of its border."""
+    for (kind, tag), samples in PANEL_SAMPLES.items():
+        normal = FLIP @ NORMAL if tag == "L" else NORMAL
+        rest, posed = [], []
+        for point, name in samples:
+            m = motion(poses, name)
+            for offset in (0.0, 0.4, -0.4):
+                rest.append(list(point + normal * offset) + [1.0])
+                posed.append(list(m @ (point + normal * offset)))
+        solution = numpy.linalg.lstsq(numpy.array(rest), numpy.array(posed), rcond=None)[0].T   # 3x4
+        linear, shift = solution[:, :3], solution[:, 3]
+        u, sigma, vt = numpy.linalg.svd(linear)
+        if numpy.linalg.det(u) < 0:
+            u[:, 2] *= -1
+            sigma[2] *= -1
+        if numpy.linalg.det(vt) < 0:
+            vt[2] *= -1
+            sigma[2] *= -1
+        sigma = numpy.maximum(sigma, 0.05)
+        head = BONES[f"{kind}.{tag}"][0]
+        to = Matrix([list(r) for r in linear]) @ head + Vector(shift)
+        scaled = Matrix([list(r) for r in u]) @ Matrix.Diagonal(Vector(sigma))
+        poses[f"{kind}.{tag}"] = Matrix.Translation(to) @ scaled.to_4x4()
+        poses[f"{kind}_skin.{tag}"] = poses[f"{kind}.{tag}"] @ Matrix([list(r) for r in vt]).to_4x4()
+    return poses
+
+
+def clip(name, frames, pose, ik=True, step=2):
     action = bpy.data.actions.new(name)
     action.use_fake_user = True
     rig.animation_data_create()
     rig.animation_data.action = action
     for f in range(0, frames + 1, step):
-        key_pose(f, pose(f / frames))
+        deltas, plant = pose(f / frames)
+        key(f, fit_panels(solve(deltas, ik, plant)))
     track = rig.animation_data.nla_tracks.new()
     track.name = name
     track.strips.new(name, 0, action)
@@ -763,70 +924,129 @@ def clip(name, frames, pose, step=2):
 
 
 def blink(t, *moments):
-    return max([max(0.0, 1 - abs(t - m) / 0.025) for m in moments] + [0.0])
+    return max([max(0.0, 1 - abs(t - m) / 0.02) for m in moments] + [0.0])
 
 
 def lids(amount):
     deltas = {}
     for side, tag in SIDES:
-        gaze = Vector((GAZE.x * side, GAZE.y, GAZE.z))
-        across = gaze.cross(Vector((0, 0, 1))).normalized()
-        deltas[f"lid.{tag}"] = about(head_of(f"lid.{tag}"), across, -0.62 * amount)
+        centre = head_of(f"lid.{tag}")
+        across = (HEAD_M.to_3x3() @ Vector((1, 0, 0)))
+        deltas[f"lid.{tag}"] = about(centre, across, -0.75 * amount)
     return deltas
 
 
-def look(phase, turn=0.25, tilt=0.1):
-    deltas = chain(NECK, "Z", [0.05 * math.sin(phase), 0.07 * math.sin(phase - 0.2), 0.09 * math.sin(phase - 0.4)])
-    deltas["head"] = about(head_of("head"), "Z", turn * math.sin(phase - 0.6)) @ about(head_of("head"), "Y", tilt * math.sin(phase + 0.6))
+def look(phase, yaw=0.2, pitch=0.06, raise_neck=0.0):
+    weights = (0.15, 0.22, 0.28, 0.35)
+    deltas = {}
+    for n, w in zip(NECKS, weights):
+        deltas[n] = about(head_of(n), "Z", yaw * w * math.sin(phase)) @ about(head_of(n), "X", -raise_neck * w)
+    deltas["head"] = about(head_of("head"), "Z", yaw * 0.6 * math.sin(phase - 0.4)) @ \
+        about(head_of("head"), "X", pitch * math.sin(phase * 0.5 + 0.7) + raise_neck * 0.9)
     return deltas
 
 
-def tail_wave(phase, amplitude=0.12, lift=0.04):
-    return {n: about(head_of(n), "Z", amplitude * (0.4 + 0.25 * i) * math.sin(phase - 0.7 * i))
-            @ about(head_of(n), "X", lift * math.sin(2 * phase - 0.5 * i)) for i, n in enumerate(TAILS)}
+def tail(phase, side=0.08, lift=0.03, curl=0.0, raise_tail=0.0):
+    deltas = {}
+    for i, n in enumerate(TAILS):
+        k = (i + 1) / len(TAILS)
+        deltas[n] = about(head_of(n), "Z", side * (0.4 + k) * math.sin(phase - 0.75 * i) + curl * (0.3 + k)) @ \
+            about(head_of(n), "X", lift * math.sin(2 * phase - 0.5 * i) + raise_tail * (1.2 - k))
+    return deltas
+
+
+def lift_body(dz=0.0, pitch=0.0, front_dz=0.0):
+    """Move the hips and chest (the feet stay planted by IK): dz for the pelvis, front_dz extra at
+    the chest, pitch rotates the spine about the hips."""
+    deltas = {"pelvis": Matrix.Translation((0, 0, dz)) @ about(head_of("pelvis"), "X", pitch)}
+    deltas["chest"] = about(head_of("chest"), "X", -math.atan2(front_dz, 0.9))
+    return deltas
+
+
+def merge(*parts):
+    out = {}
+    for part in parts:
+        for name, delta in part.items():
+            out[name] = out[name] @ delta if name in out else delta
+    return out
 
 
 def idle(t):
     phase = 2 * math.pi * t
     breath = math.sin(2 * phase)
-    deltas = wings(fold=0.04 + 0.03 * breath, flap=0.03 * breath)
-    deltas.update(chain(["spine", "chest"], "X", [0.008 * breath, 0.012 * breath]))
-    deltas.update(look(phase))
-    screech = max(0.0, math.sin(math.pi * (t - 0.42) / 0.22)) if 0.42 <= t <= 0.64 else 0.0
-    deltas["jaw"] = about(head_of("jaw"), "X", 0.36 * screech)
-    deltas["head"] = deltas["head"] @ about(head_of("head"), "X", -0.12 * screech)
-    deltas.update(lids(blink(t, 0.18, 0.8)))
-    deltas.update(tail_wave(phase))
-    return deltas
-
-
-def wing_beat(t):
-    phase = 2 * math.pi * t
-    upstroke = max(0.0, -math.sin(phase))
-    deltas = wings(fold=0.38 * upstroke, flap=-0.3 + 0.85 * math.cos(phase), hand_flap=0.3 * math.cos(phase - 1.0))
-    deltas.update(chain(["spine", "chest"], "X", [0.02 * math.cos(phase), 0.03 * math.cos(phase)]))
-    # The neck counters the body's pitch so the head stays steady, as a bird's does.
-    deltas.update(chain(NECK, "X", [-0.02 * math.cos(phase), -0.015 * math.cos(phase), -0.01 * math.cos(phase)]))
-    deltas["head"] = about(head_of("head"), "X", 0.03 * math.sin(phase))
-    deltas.update(tail_wave(phase, 0.04, 0.1))
-    return deltas
+    deltas = merge(wings(fold=0.96 + 0.02 * math.sin(phase * 2 + 1), flap=0.015 * breath),
+                   lift_body(0.01 * breath),
+                   chain(["spine1", "spine2"], "X", [0.004 * breath, 0.006 * breath]),
+                   {"throat": about(head_of("throat"), "X", 0) @ Matrix.Diagonal((1 + 0.03 * breath, 1, 1 + 0.03 * breath, 1))},
+                   look(phase, 0.32, 0.07), lids(blink(t, 0.18, 0.62, 0.66)), tail(phase, 0.09, 0.03))
+    return deltas, None
 
 
 def perched(t):
     phase = 2 * math.pi * t
     breath = math.sin(2 * phase)
-    deltas = wings(fold=1.0, lower=1.29 - 0.01 * breath)
-    deltas.update(chain(["spine", "chest"], "X", [0.008 * breath, 0.012 * breath]))
-    deltas.update(look(phase, 0.35, 0.14))
-    deltas.update(lids(blink(t, 0.35, 0.72)))
-    deltas.update(tail_wave(phase, 0.08, 0.03))
-    return deltas
+    deltas = merge(wings(fold=1.0, flap=0.01 * breath),
+                   lift_body(-0.36 + 0.008 * breath, -0.05, 0.18),
+                   look(phase, 0.22, 0.05, raise_neck=0.18),
+                   lids(blink(t, 0.3, 0.78)), tail(phase, 0.04, 0.02, curl=0.16))
+    return deltas, None
+
+
+def wing_beat(t):
+    phase = 2 * math.pi * t
+    upstroke = max(0.0, -math.sin(phase))
+    deltas = merge(wings(fold=0.42 * upstroke, flap=0.3 + 0.65 * math.cos(phase), tip_flap=0.35 * math.cos(phase - 1.1),
+                         curl=upstroke),
+                   lift_body(0.05 * math.sin(phase + 0.6), 0.02 * math.cos(phase)),
+                   chain(NECKS, "X", [-0.012 * math.cos(phase)] * 4),
+                   {"head": about(head_of("head"), "X", 0.04 * math.sin(phase))},
+                   tail(phase, 0.04, 0.08))
+    return deltas, None
+
+
+def roar(t):
+    gather = smooth(0.0, 0.25, t) * (1 - smooth(0.25, 0.38, t))
+    open_ = smooth(0.26, 0.4, t) * (1 - smooth(0.78, 0.95, t))
+    shake = math.sin(t * 2 * math.pi * 9) * open_ * 0.015
+    spread = smooth(0.18, 0.36, t) * (1 - smooth(0.82, 0.98, t))
+    neck = [-0.1 * gather + 0.05 * open_ for _ in NECKS]
+    deltas = merge(wings(fold=0.96 * (1 - spread), flap=0.45 * spread, spread=0.6 * spread),
+                   lift_body(-0.06 * gather + 0.06 * open_, 0.0, -0.08 * gather + 0.16 * open_),
+                   chain(NECKS, "X", neck),
+                   {"head": about(head_of("head"), "X", 0.28 * gather - 0.32 * open_ + shake) @ about(head_of("head"), "Z", shake),
+                    "jaw": about(head_of("jaw"), HEAD_M.to_3x3() @ Vector((1, 0, 0)), 0.6 * open_),
+                    "throat": Matrix.Translation(head_of("throat")) @ Matrix.Diagonal((1 + 0.2 * open_, 1, 1 + 0.25 * open_, 1)) @ Matrix.Translation(-head_of("throat"))},
+                   lids(0.25 * open_), tail(t * 2 * math.pi * 1.5, 0.06 + 0.12 * open_, 0.05))
+    return deltas, None
+
+
+def flight(t):
+    phase = 2 * math.pi * t
+    upstroke = max(0.0, -math.sin(phase))
+    deltas = merge({"root": Matrix.Translation((0, 0, 2.3 - 0.12 * math.cos(phase + 0.3)))},
+                   wings(fold=0.45 * upstroke, flap=-0.1 + 0.95 * math.cos(phase), tip_flap=0.4 * math.cos(phase - 1.1),
+                         curl=upstroke, spread=0.5),
+                   {"pelvis": about(head_of("pelvis"), "X", 0.04 * math.cos(phase))},
+                   chain(NECKS, "X", [0.14, 0.1, 0.06, 0.03]),
+                   {"head": about(head_of("head"), "X", -0.28 + 0.03 * math.sin(phase))},
+                   tail(phase, 0.05, 0.06, raise_tail=0.07))
+    for side, tag in SIDES:
+        deltas[f"thigh.{tag}"] = about(head_of(f"thigh.{tag}"), "X", 0.85)
+        deltas[f"shin.{tag}"] = about(head_of(f"shin.{tag}"), "X", -0.5)
+        deltas[f"foot.{tag}"] = about(head_of(f"foot.{tag}"), "X", 0.9)
+        deltas[f"upperarm.{tag}"] = about(head_of(f"upperarm.{tag}"), "X", 0.55)
+        deltas[f"forearm.{tag}"] = about(head_of(f"forearm.{tag}"), "X", -1.1)
+        deltas[f"hand.{tag}"] = about(head_of(f"hand.{tag}"), "X", 0.7)
+    return deltas, None
 
 
 bpy.context.scene.render.fps = 24
-clip("Idle", 96, idle)
-clip("Wing beat", 24, wing_beat)
-clip("Perched", 96, perched)
+clip("Idle", 120, idle)
+clip("Perched", 120, perched)
+clip("Wing beat", 36, wing_beat)
+clip("Roar", 96, roar)
+clip("Flight", 48, flight, ik=False)
 for pose_bone in rig.pose.bones:
     pose_bone.rotation_quaternion = (1, 0, 0, 0)
     pose_bone.location = (0, 0, 0)
+    pose_bone.scale = (1, 1, 1)

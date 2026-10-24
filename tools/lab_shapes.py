@@ -69,12 +69,14 @@ class Batch:
     def __init__(self, name, mat):
         self.name, self.mat = name, mat
         self.verts, self.faces, self.uvs = [], [], []
-        self.tints, self.weights = [], []
+        self.tints, self.weights, self.bodies = [], [], []
         self.count = 0
 
-    def add(self, piece, tint=None, weights=None):
-        """`weights` is {bone: weight} for the whole piece, or a list with one dict per vertex."""
+    def add(self, piece, tint=None, weights=None, body=None):
+        """`weights` is {bone: weight} for the whole piece, or a list with one dict per vertex.
+        `body` is an (x, y, z) "Body" attribute value for the piece, or a list per vertex."""
         base = len(self.verts)
+        self.bodies.extend(body if isinstance(body, list) else [body] * len(piece.verts))
         self.verts.extend(piece.verts)
         self.faces.extend(tuple(i + base for i in face) for face in piece.faces)
         self.uvs.extend(piece.uvs or [tuple((0.0, 0.0) for _ in face) for face in piece.faces])
@@ -97,6 +99,9 @@ class Batch:
                 item.color = (*(tint if tint is not None else fallback), 1.0)
         if any(w for w in self.weights):
             assign_weights(obj, self.weights)
+        if any(b is not None for b in self.bodies):
+            attribute = obj.data.attributes.new("Body", "FLOAT_VECTOR", "POINT")
+            attribute.data.foreach_set("vector", [c for b in self.bodies for c in (b or (0.0, 0.0, 0.0))])
         return obj
 
 
@@ -442,3 +447,139 @@ def eyelid(centre, radius, axis, angle, thickness=0.006, segments=20, rings=6):
     last, top = 1 + (bands - 1) * segments, len(verts) - 1
     faces += [(last + k, top, last + (k + 1) % segments) for k in range(segments)]
     return Piece(verts, faces, None)
+
+
+# ---------------------------------------------------------------- surfaces between curves
+
+def polyline(points):
+    """A curve through `points`, parameterised 0-1 by arc length: returns f(t) -> Vector."""
+    points = [Vector(p) for p in points]
+    lengths = [0.0]
+    for a, b in zip(points, points[1:]):
+        lengths.append(lengths[-1] + (b - a).length)
+    total = lengths[-1] or 1.0
+
+    def at(t):
+        d = max(0.0, min(1.0, t)) * total
+        for i in range(len(points) - 1):
+            if d <= lengths[i + 1] or i == len(points) - 2:
+                span = (lengths[i + 1] - lengths[i]) or 1.0
+                return points[i].lerp(points[i + 1], (d - lengths[i]) / span)
+        return points[-1].copy()
+    return at
+
+
+def coons_patch(bottom, top, left, right, nu, nv, offset=None):
+    """A smooth quad surface bounded by four curves (each f(t) -> Vector, t in 0-1):
+    bottom(u) = S(u, 0), top(u) = S(u, 1), left(v) = S(0, v), right(v) = S(1, v). Corners must
+    agree. `offset(u, v)` may add a displacement such as membrane billow. UVs are (u, v)."""
+    p00, p10, p01, p11 = bottom(0), bottom(1), top(0), top(1)
+    verts = []
+    for j in range(nv + 1):
+        v = j / nv
+        for i in range(nu + 1):
+            u = i / nu
+            point = (bottom(u) * (1 - v) + top(u) * v + left(v) * (1 - u) + right(v) * u
+                     - (p00 * ((1 - u) * (1 - v)) + p10 * (u * (1 - v)) + p01 * ((1 - u) * v) + p11 * (u * v)))
+            verts.append(point + offset(u, v) if offset else point)
+    faces, uvs, row = [], [], nu + 1
+    for j in range(nv):
+        for i in range(nu):
+            a = j * row + i
+            faces.append((a, a + 1, a + row + 1, a + row))
+            uvs.append(((i / nu, j / nv), ((i + 1) / nu, j / nv), ((i + 1) / nu, (j + 1) / nv), (i / nu, (j + 1) / nv)))
+    return Piece(verts, faces, uvs)
+
+
+def set_attribute(obj, name, function):
+    """Store function(co) -> (x, y, z) per vertex as a float-vector attribute, for materials that
+    read it (for example the dragon recipe's "Body" coordinates)."""
+    attribute = obj.data.attributes.get(name) or obj.data.attributes.new(name, "FLOAT_VECTOR", "POINT")
+    values = [c for v in obj.data.vertices for c in function(obj.matrix_world @ v.co)]
+    attribute.data.foreach_set("vector", values)
+
+
+def along(piece, start, end):
+    """Per-vertex "Body" values (t, 0, 0): t is 0 at `start` and 1 at `end`, for root-to-tip
+    gradients on horns, teeth and claws."""
+    start, end = Vector(start), Vector(end)
+    axis = end - start
+    length2 = max(axis.length_squared, 1e-12)
+    return [(max(0.0, min(1.0, (Vector(v) - start).dot(axis) / length2)), 0.0, 0.0) for v in piece.verts]
+
+
+def apply_modifier(obj, kind, **settings):
+    """Add a modifier (e.g. "SMOOTH" or "DECIMATE"), set its properties and apply it to the mesh."""
+    modifier = obj.modifiers.new(kind.title(), kind)
+    for key, value in settings.items():
+        setattr(modifier, key, value)
+    depsgraph = bpy.context.evaluated_depsgraph_get()
+    baked = bpy.data.meshes.new_from_object(obj.evaluated_get(depsgraph))
+    old = obj.data
+    obj.modifiers.clear()
+    obj.data = baked
+    baked.name = old.name
+    for mat in old.materials:
+        if mat.name not in [m.name for m in baked.materials]:
+            baked.materials.append(mat)
+    bpy.data.meshes.remove(old)
+    baked.polygons.foreach_set("use_smooth", [True] * len(baked.polygons))
+    for name in ("sharp_edge", "sharp_face"):
+        if name in baked.attributes:
+            baked.attributes.remove(baked.attributes[name])
+    return obj
+
+
+CHAIN_FIELD = 0.715   # surface radius of a closely spaced metaball chain, relative to element radius
+
+
+def blob_body(name, mat, chains, masses=(), resolution=0.03, decimate=None):
+    """An organic body from metaballs: each chain is a polyline of (position, side radius, up radius)
+    nodes swept with closely spaced ellipsoids, so junctions blend smoothly without the folds a skin
+    modifier makes where radii are large. `masses` adds muscle or fat as (centre, (rx, ry, rz),
+    rotation matrix or None, negative) ellipsoids, sized as the bulge's own radii. The result is
+    converted to a mesh and optionally decimated to `decimate` of its faces."""
+    ball = bpy.data.metaballs.new(name)
+    ball.resolution = ball.render_resolution = resolution
+    ball.threshold = 0.6
+    obj = bpy.data.objects.new(name, ball)
+    bpy.context.collection.objects.link(obj)
+    for chain in chains:
+        nodes = [(Vector(p), a, b) for p, a, b in chain]
+        for (p0, a0, b0), (p1, a1, b1) in zip(nodes, nodes[1:]):
+            axis = p1 - p0
+            steps = max(1, int(axis.length / (0.22 * min(a0, a1, b0, b1))))
+            for k in range(steps):
+                t = k / steps
+                p, a, b = p0.lerp(p1, t), a0 + (a1 - a0) * t, b0 + (b1 - b0) * t
+                tangent = axis.normalized()
+                up = Vector((0, 0, 1)) - tangent * tangent.z
+                up = up.normalized() if up.length > 1e-3 else Vector((0, 1, 0))
+                element = ball.elements.new(type="ELLIPSOID")
+                element.co = p
+                element.radius = max(a, b) / CHAIN_FIELD
+                element.size_x, element.size_y, element.size_z = a / max(a, b), 1.0, b / max(a, b)
+                element.rotation = Matrix((tangent.cross(up), tangent, up)).transposed().to_quaternion()
+        last = nodes[-1]
+        element = ball.elements.new(type="BALL")
+        element.co, element.radius = last[0], min(last[1], last[2]) / CHAIN_FIELD * 0.8
+    for centre, radii, rotation, negative in masses:
+        element = ball.elements.new(type="ELLIPSOID")
+        element.co = Vector(centre)
+        element.radius = max(radii) / 0.575
+        element.size_x, element.size_y, element.size_z = (r / max(radii) for r in radii)
+        if rotation is not None:
+            element.rotation = rotation.to_quaternion()
+        element.use_negative = negative
+    depsgraph = bpy.context.evaluated_depsgraph_get()
+    mesh = bpy.data.meshes.new_from_object(obj.evaluated_get(depsgraph))
+    bpy.data.objects.remove(obj)
+    bpy.data.metaballs.remove(ball)
+    mesh.name = name
+    result = bpy.data.objects.new(name, mesh)
+    bpy.context.collection.objects.link(result)
+    mesh.materials.append(mat)
+    mesh.polygons.foreach_set("use_smooth", [True] * len(mesh.polygons))
+    if decimate:
+        apply_modifier(result, "DECIMATE", ratio=decimate)
+    return result

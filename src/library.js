@@ -37,3 +37,10 @@ export function sourceLabel(item) {
     default: return item.sourceRepository ? `From ${item.sourceRepository}` : 'Shelf model';
   }
 }
+
+// The clip to play when a creation opens: one named Idle if there is one (glTF exporters often
+// sort clips alphabetically), otherwise the first.
+export function defaultClipIndex(clips) {
+  const idle = clips.findIndex(clip => /^idle\b/i.test(clip?.name || ''));
+  return Math.max(idle, 0);
+}

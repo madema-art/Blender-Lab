@@ -2,7 +2,7 @@
   {
     "name": "Active Creation",
     "file": "active-creation.glb",
-    "updated": "2026-10-23T23:14:11+00:00"
+    "updated": "2026-10-24T13:28:51+00:00"
   },
   {
     "name": "Alien Flying Saucer",
@@ -282,5 +282,11 @@
     "file": "griffon-v2.glb",
     "updated": "2026-10-23T23:14:11+00:00",
     "creationSource": "creations/griffon-v2/scene.py"
+  },
+  {
+    "name": "Red Dragon",
+    "file": "red-dragon.glb",
+    "updated": "2026-10-24T13:28:51+00:00",
+    "creationSource": "creations/red-dragon/scene.py"
   }
 ]

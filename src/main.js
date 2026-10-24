@@ -4,7 +4,7 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 import { makeDemo } from './demo.js';
 import { disposeObject } from './dispose.js';
-import { formatUpdated, matchesSearch, newestFirst, sourceLabel } from './library.js';
+import { defaultClipIndex, formatUpdated, matchesSearch, newestFirst, sourceLabel } from './library.js';
 import { createThumbnails } from './thumbnails.js';
 import { createLighting, LIGHTING_PRESETS } from './lighting.js';
 import { CHANNELS, collectMaterials, createChannelView, describeMaterial, formatMegabytes, isolate, textureMemory } from './inspect.js';
@@ -229,7 +229,7 @@ function install(model, animations, asset) {
   for (const id of ['channel']) $(id).disabled = false;
   renderMaterials();
   highlightCurrent();
-  selectClip(0);
+  selectClip(defaultClipIndex(clips));
   frame();
   status(`Showing ${asset.name}`);
 }

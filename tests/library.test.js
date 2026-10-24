@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { formatUpdated, matchesSearch, newestFirst, sourceLabel } from '../src/library.js';
+import { defaultClipIndex, formatUpdated, matchesSearch, newestFirst, sourceLabel } from '../src/library.js';
 
 test('newestFirst lists the latest update first and keeps undated items last in shelf order', () => {
   const shelf = [
@@ -32,4 +32,11 @@ test('formatUpdated and sourceLabel use plain language', () => {
   assert.equal(sourceLabel({ kind: 'active' }), 'Made in Blender for this lab');
   assert.equal(sourceLabel({ kind: 'repository', sourceRepository: 'madema-art/Paradise-island' }), 'From madema-art/Paradise-island');
   assert.equal(sourceLabel({ kind: 'local' }), 'Opened from this computer');
+});
+
+test('defaultClipIndex prefers an Idle clip and otherwise plays the first', () => {
+  assert.equal(defaultClipIndex([{ name: 'Flight' }, { name: 'Idle' }, { name: 'Roar' }]), 1);
+  assert.equal(defaultClipIndex([{ name: 'idle breathing' }]), 0);
+  assert.equal(defaultClipIndex([{ name: 'Walk' }, { name: 'Idler' }]), 0);
+  assert.equal(defaultClipIndex([]), 0);
 });
